@@ -129,7 +129,28 @@
   .jira-meta{ font-size:11px; color:var(--muted); margin-top:5px; line-height:1.5; }
   .jira-meta a{ color:#8fb0ff; }
   .jira-meta .st{ display:inline-block; padding:1px 7px; border-radius:8px; font-weight:600; }
+  .jira-meta .drift{ margin-top:6px; padding:6px 8px; border:1px solid #6b4a1f; background:#2a1d0f; border-radius:8px; color:#f6c48f; }
+  .jira-meta .drow{ margin-top:4px; }
+  .jira-meta .dbtn{ margin-left:4px; font-size:11px; padding:2px 7px; border-radius:6px; border:1px solid #f2994a; background:transparent; color:#f6c48f; cursor:pointer; font-family:var(--font); }
+  .jira-meta .dbtn:hover{ background:#f2994a; color:#231a00; }
+  #btnProposals{ border-color:#a06bff; }
+  #updBanner{ position:absolute; left:50%; top:12px; transform:translateX(-50%); z-index:28; display:none; gap:8px; align-items:center;
+    background:#2a1d0f; border:1px solid #f2994a; color:#f6c48f; padding:8px 12px; border-radius:12px; font-size:13px; }
+  #updBanner.show{ display:flex; }
+  #updBanner button{ font-size:12px; padding:4px 10px; border-radius:8px; border:1px solid #f2994a; background:transparent; color:#f6c48f; cursor:pointer; font-family:var(--font); }
+  .prop{ border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:8px 4px; }
+  .prop .ps{ font-size:14px; font-weight:600; }
+  .prop .pm{ font-size:11px; color:var(--muted); margin:3px 0 6px; }
+  .prop ul{ margin:4px 0 8px 18px; padding:0; font-size:12px; color:#cdd6ea; }
+  .prop .pa{ display:flex; gap:8px; }
 
+  .modalbg{ position:fixed; inset:0; background:rgba(5,8,14,.6); z-index:50; display:none; align-items:flex-start; justify-content:center; padding-top:8vh; }
+  .modalbg.show{ display:flex; }
+  .modalbox{ width:min(720px, calc(100vw - 32px)); max-height:78vh; display:flex; flex-direction:column; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+  .modalbox header{ display:flex; align-items:center; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); }
+  .modalbox header h2{ font-size:15px; margin:0; flex:1; }
+  #propList{ overflow:auto; padding:6px 10px 12px; }
   #modalBg{ position:fixed; inset:0; background:rgba(5,8,14,.6); z-index:50; display:none; align-items:flex-start; justify-content:center; padding-top:8vh; }
   #modalBg.show{ display:flex; }
   #modal{ width:min(720px, calc(100vw - 32px)); max-height:78vh; display:flex; flex-direction:column; background:var(--panel);
@@ -172,6 +193,7 @@
     <button class="tb ghost" id="btnSave">💾 保存</button>
     <button class="tb ghost" id="btnExport">⇩ 書出し</button>
     <button class="tb ghost cloud-only" id="btnJira" title="ノードに書いたJiraキーの状態を取り直す">⟳ Jira</button>
+    <button class="tb ghost" id="btnProposals" style="display:none" title="AI などからの提案（承認するまでマップには反映されない）">💡 提案</button>
     <div class="grow"></div>
     <button class="tb ghost" id="btnZoomOut">－</button>
     <span id="zoomlabel">100%</span>
@@ -229,6 +251,7 @@
       <div class="lg"><span class="dot" style="background:var(--goal)"></span>ゴール</div>
     </div>
     <div id="toast"></div>
+    <div id="updBanner"><span id="updText"></span><button id="updLoad">最新を読み込む（自分の変更は破棄）</button><button id="updLater">あとで</button></div>
   </div>
 </div>
 
@@ -242,6 +265,16 @@
       <button class="tb ghost" id="btnCloseModal">✕</button>
     </header>
     <div id="mapList"></div>
+  </div>
+</div>
+
+<div id="propBg" class="modalbg">
+  <div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="propTitle">
+    <header>
+      <h2 id="propTitle">このマップへの提案</h2>
+      <button class="tb ghost" id="btnCloseProp">✕</button>
+    </header>
+    <div id="propList"></div>
   </div>
 </div>
 
@@ -332,36 +365,46 @@ function fmtDue(d){
 function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function isOverdue(d){ return !!d && /^\d{4}-\d{2}-\d{2}/.test(d) && d.slice(0,10) < todayStr(); }
 
-/* ---- Jira 連携（クラウド版のみ）----
-   ノードの jira にキーを書くと、Jiraの状態を表示に使う。
-   ・完了日: ノードの done が空で、Jiraが「完了」カテゴリなら解決日を完了日として扱う
-   ・担当/期限: ノードに書いていなければ Jira の値を使う（ノードに書いた値が優先） */
+/* ---- Jira 連携（共有版のみ）----
+   マップが正典。完了・担当・期限は「マップに書いた値」だけを使い、Jira の値で書き換えない。
+   Jira と食い違うときは「ずれ」の印（≠）を出し、人が編集パネルで反映するか決める。 */
 let jira = {};              // key → { summary,status,category,assignee,duedate,resolutiondate,url,children:{total,done} }
 let jiraMissing = new Set();
-let jiraState = "idle";     // idle | loading | ok | off | error
+let jiraState = "idle";     // idle | loading | ok | off | auth | error
+function samePerson(a,b){
+  const x=String(a||"").replace(/\s|さん/g,""), y=String(b||"").replace(/\s|さん/g,"");
+  return !!x && !!y && (x.includes(y) || y.includes(x));
+}
 function effective(n){
   const ji = n.jira ? jira[n.jira] : null;
-  const manualDone = !!(n.done && String(n.done).trim());
-  const jiraDone = !!(ji && ji.category==="done");
-  return {
-    ji,
-    done: manualDone || jiraDone,
-    doneDate: manualDone ? n.done : (jiraDone && ji.resolutiondate ? ji.resolutiondate.slice(0,10) : ""),
-    assignee: n.assignee || (ji && ji.assignee) || "",
-    due: n.due || (ji && ji.duedate) || ""
-  };
+  const done = !!(n.done && String(n.done).trim());
+  const drift = [];   // { text, field?, value? }  field があれば「マップに反映」できる
+  if(ji){
+    const jDone = ji.category==="done";
+    const jDate = ji.resolutiondate ? ji.resolutiondate.slice(0,10) : "";
+    if(jDone && !done) drift.push({ text:`Jira は「${ji.status}」${jDate?`（${jDate}）`:""}／マップは未完了`, field:"done", value: jDate || todayStr(), label:"完了にする" });
+    if(!jDone && done) drift.push({ text:`マップは完了／Jira は「${ji.status}」` });
+    if(ji.assignee && !n.assignee) drift.push({ text:`担当：マップは空／Jira は ${ji.assignee}`, field:"assignee", value: ji.assignee, label:"担当を入れる" });
+    else if(n.assignee && ji.assignee && !samePerson(n.assignee, ji.assignee)) drift.push({ text:`担当：マップ ${n.assignee}／Jira ${ji.assignee}`, field:"assignee", value: ji.assignee, label:"Jiraの担当にする" });
+    else if(n.assignee && !ji.assignee) drift.push({ text:`担当：マップ ${n.assignee}／Jira は未割当` });
+    if(ji.duedate && !n.due) drift.push({ text:`期限：マップは空／Jira は ${ji.duedate}`, field:"due", value: ji.duedate, label:"期限を入れる" });
+    else if(n.due && ji.duedate && n.due!==ji.duedate) drift.push({ text:`期限：マップ ${n.due}／Jira ${ji.duedate}`, field:"due", value: ji.duedate, label:"Jiraの期限にする" });
+  }
+  return { ji, done, doneDate: done ? n.done : "", assignee: n.assignee||"", due: n.due||"", drift };
 }
 const JIRA_COLORS = {
   done:          { bg:"#10301f", border:"#2fbf71", fg:"#86e5ad" },
   indeterminate: { bg:"#142147", border:"#4c7dff", fg:"#b9cbff" },
   new:           { bg:"#1b2236", border:"#43507a", fg:"#cdd6ea" },
   missing:       { bg:"#341219", border:"#ff5d6c", fg:"#ffb3bb" },
-  pending:       { bg:"#161d2e", border:"#2b3654", fg:"#93a0be" }
+  pending:       { bg:"#161d2e", border:"#2b3654", fg:"#93a0be" },
+  drift:         { border:"#f2994a" }
 };
-function jiraChip(key, ji){
+function jiraChip(key, ji, drift){
   if(ji){
     const c = JIRA_COLORS[ji.category] || JIRA_COLORS.new;
     const prog = ji.children && ji.children.total ? `  ${ji.children.done}/${ji.children.total}` : "";
+    if(drift && drift.length) return { text:`≠ ${key}  ${ji.status}${prog}`, ...c, border: JIRA_COLORS.drift.border };
     return { text:`${key}  ${ji.status}${prog}`, ...c };
   }
   if(jiraMissing.has(key)) return { text:`${key}  見つかりません`, ...JIRA_COLORS.missing };
@@ -495,7 +538,7 @@ function render(){
     }
     // Jira チップ（丸の下）：キー・状態・子課題の進捗
     if(n.jira){
-      const st = jiraChip(n.jira, ev.ji);
+      const st = jiraChip(n.jira, ev.ji, ev.drift);
       const tw = measure(st.text, FONT_BADGE) + 14;
       const cy = n.y + r + (ev.ji && ev.ji.children && ev.ji.children.total ? 26 : 16);
       chips += `<g data-node="${esc(n.id)}" style="cursor:grab"><rect x="${n.x-tw/2}" y="${cy-9}" width="${tw}" height="18" rx="9" fill="${st.bg}" stroke="${st.border}" stroke-width="1.2"></rect>`;
@@ -542,16 +585,28 @@ function updateJiraMeta(n){
   if(ji){
     const c=JIRA_COLORS[ji.category]||JIRA_COLORS.new;
     const prog=ji.children&&ji.children.total?` ／ 子課題 ${ji.children.done}/${ji.children.total} 完了`:"";
+    const drift=effective(n).drift;
     el.innerHTML=`<span class="st" style="background:${c.bg};color:${c.fg};border:1px solid ${c.border}">${esc(ji.status)}</span> `
       +`${esc(ji.summary)}${esc(prog)}<br>`
       +`担当: ${esc(ji.assignee||"未割当")} ／ 期限: ${esc(ji.duedate||"なし")} `
-      +`<a href="${esc(ji.url)}" target="_blank" rel="noopener">Jiraで開く ↗</a>`;
+      +`<a href="${esc(ji.url)}" target="_blank" rel="noopener">Jiraで開く ↗</a>`
+      +(drift.length?`<div class="drift"><b>≠ マップとのずれ</b>（マップが正。必要なら反映）`
+        +drift.map(d=>`<div class="drow">${esc(d.text)}${d.field?` <button class="dbtn" data-field="${esc(d.field)}" data-value="${esc(d.value)}">${esc(d.label)}</button>`:""}</div>`).join("")+`</div>`:"");
   } else if(jiraMissing.has(n.jira)) el.textContent="この課題はJiraに見つかりません（キーの打ち間違い、または権限なし）";
+  else if(jiraState==="auth") el.textContent="Jiraの認証に失敗しています（Worker の ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN を確認）";
   else if(jiraState==="off") el.textContent="Jira連携がサーバーで未設定です";
   else if(jiraState==="error") el.textContent="Jiraの取得に失敗しました（⟳ Jira で再試行）";
   else el.textContent="Jiraから取得中…";
 }
 function hideInspector(){ inspector.classList.remove("show"); }
+// ずれの「反映」ボタン：人が押したときだけ、マップの値を書き換える（保存は 💾）
+document.getElementById("fJiraMeta").addEventListener("click", e=>{
+  const b=e.target.closest(".dbtn"); if(!b) return;
+  const n=selectedNode(); if(!n) return;
+  n[b.dataset.field]=b.dataset.value;
+  showInspector(n); render();
+  toast("マップに反映しました（💾 保存で確定）");
+});
 
 function refreshInspector(){
   if(selNodes.size===1){ const n=nodeById([...selNodes][0]); if(n){ showInspector(n); return; } }
@@ -1001,8 +1056,46 @@ function loadData(obj, {layout=false}={}){
   document.getElementById("tbName").value  = data.titleBlock.name;
   document.getElementById("tbDate").value  = data.titleBlock.date;
   selNodes.clear(); selEdge=null; marquee=null; connectFrom=null; hideInspector();
-  const needLayout = layout || data.nodes.some(n=>n.x===undefined || n.y===undefined);
-  if(needLayout) autoLayout(); else { render(); fitView(); }
+  const missing = data.nodes.filter(n=>n.x===undefined || n.y===undefined);
+  if(layout || (missing.length && missing.length===data.nodes.length)) autoLayout();
+  else { if(missing.length) placeNewNodes(missing); render(); fitView(); }
+}
+
+/* 座標のないノード（AI や提案で追加されたもの）を、つながるノードの近くに置く。
+   手で調整した他のノードの配置は動かさない。 */
+function placeNewNodes(missing){
+  const has = n => typeof n.x==="number" && typeof n.y==="number";
+  const taken = (x,y,self) => data.nodes.some(o=>o!==self && has(o) && Math.hypot(o.x-x, o.y-y) < 105);
+  let pending=[...missing];
+  for(let round=0; round<5 && pending.length; round++){
+    const next=[];
+    for(const n of pending){
+      const preds=data.edges.filter(e=>e.to===n.id).map(e=>nodeById(e.from)).filter(o=>o&&has(o));
+      const succs=data.edges.filter(e=>e.from===n.id).map(e=>nodeById(e.to)).filter(o=>o&&has(o));
+      if(!preds.length && !succs.length && round<4){ next.push(n); continue; }
+      const avg = (xs,k) => xs.reduce((a,o)=>a+o[k],0)/xs.length;
+      let x, y;
+      if(preds.length && succs.length){ x=(avg(preds,"x")+avg(succs,"x"))/2; y=(avg(preds,"y")+avg(succs,"y"))/2; }
+      else if(preds.length){ x=avg(preds,"x")+150; y=avg(preds,"y")-60; }
+      else if(succs.length){ x=avg(succs,"x")-150; y=avg(succs,"y")+60; }
+      else { x=PAGE.w*0.5; y=PAGE.h*0.5; }
+      // 重なったら上下に少しずつずらす
+      for(let k=1; k<12 && taken(x,y,n); k++) y += (k%2 ? 1 : -1) * 110 * Math.ceil(k/2);
+      n.x=x; n.y=y; clampToPage(n);
+    }
+    pending=next;
+  }
+}
+
+/* ?node=<id> で開いたとき、そのノードを選択して画面の中央に寄せる */
+function focusNode(id){
+  const n=nodeById(id); if(!n) return false;
+  selectNode(id);
+  const r=svg.getBoundingClientRect();
+  view.tx = r.width/2 - n.x*view.scale;
+  view.ty = r.height/2 - n.y*view.scale;
+  applyTransform();
+  return true;
 }
 
 /* File System Access API (対応ブラウザ: Edge/Chrome) + フォールバック */
@@ -1140,18 +1233,22 @@ function setMapUrl(){
 }
 
 /** マップを開く。push=true はリンクからのドリルダウン（「← 戻る」に積む）。 */
-async function cloudOpen(name, { push=false, keepNav=false, silentMissing=false, skipConfirm=false }={}){
+async function cloudOpen(name, { push=false, keepNav=false, silentMissing=false, skipConfirm=false, keepView=false, quiet=false }={}){
   if(!push && !skipConfirm && isDirty() && !confirm("未保存の変更があります。破棄して開きますか？")) return false;
   let r; try{ r=await api("GET", "/api/maps/"+encodeURIComponent(name)); }catch(_){ return false; }
   if(r.status===404){ if(!silentMissing) toast("「"+name+"」というマップはまだありません"); return false; }
   if(!r.ok){ toast("読み込み失敗： "+errMsg(r)); return false; }
   const snap = push ? snapshot() : null;
+  const v0 = keepView ? { ...view } : null;
+  const sel = keepView ? [...selNodes] : [];
   cloud={ name:r.data.name, version:r.data.version, savedJson:"", updatedBy:r.data.updated_by, updatedAt:r.data.updated_at };
   loadData(r.data.map);
+  if(v0){ view=v0; applyTransform(); if(sel.length===1 && nodeById(sel[0])) selectNode(sel[0]); }
   cloud.savedJson=currentJson();
   if(push) navStack.push(snap); else if(!keepNav) navStack=[];
-  updateBackBtn(); setMapUrl(); updateSaveState(); refreshJira();
-  toast("開く： "+(r.data.map.title||name));
+  hideUpdateBanner();
+  updateBackBtn(); setMapUrl(); updateSaveState(); refreshJira(); pollHead(true);
+  if(!quiet) toast("開く： "+(r.data.map.title||name));
   return true;
 }
 async function cloudReload(){
@@ -1264,6 +1361,7 @@ async function refreshJira(force=false){
   jiraState="loading";
   let r; try{ r=await api("POST", "/api/jira/issues", { keys, refresh:force }); }catch(_){ return; }
   if(r.status===503){ jiraState="off"; if(force) toast("Jira連携がサーバーで未設定です"); }
+  else if(r.data && r.data.error==="jira_auth_failed"){ if(jiraState!=="auth"||force) toast("Jiraの認証に失敗しています（管理者に連絡）"); jiraState="auth"; }
   else if(!r.ok){ jiraState="error"; toast("Jiraの取得に失敗： "+errMsg(r)); }
   else {
     jira={ ...jira, ...r.data.issues };
@@ -1277,6 +1375,72 @@ async function refreshJira(force=false){
 }
 document.getElementById("btnJira").addEventListener("click", ()=>refreshJira(true));
 setInterval(()=>{ if(CLOUD && document.visibilityState==="visible") refreshJira(); }, 5*60*1000);
+
+/* ---- 他の人（や AI）の更新を知らせる：20秒ごとに版番号だけ確認 ---- */
+let openProposals=0;
+async function pollHead(force=false){
+  if(!CLOUD || !cloud.name || cloud.version===0) return;
+  if(!force && document.visibilityState!=="visible") return;
+  let r; try{ r=await api("GET", "/api/maps/"+encodeURIComponent(cloud.name)+"/head"); }catch(_){ return; }
+  if(!r.ok) return;
+  setProposalCount(r.data.openProposals||0);
+  if(r.data.version>cloud.version){
+    const who=shortUser(r.data.updated_by);
+    if(!isDirty()){
+      if(await cloudOpen(cloud.name, { keepNav:true, skipConfirm:true, keepView:true, quiet:true }))
+        toast(who+" の更新を反映しました（v"+r.data.version+"）");
+    } else showUpdateBanner(who+" が更新しました（v"+r.data.version+"）。あなたにも未保存の変更があります。");
+  }
+}
+setInterval(()=>pollHead(), 20000);
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") pollHead(); });
+function showUpdateBanner(text){ document.getElementById("updText").textContent=text; document.getElementById("updBanner").classList.add("show"); }
+function hideUpdateBanner(){ document.getElementById("updBanner").classList.remove("show"); }
+document.getElementById("updLater").addEventListener("click", hideUpdateBanner);
+document.getElementById("updLoad").addEventListener("click", ()=>{ hideUpdateBanner(); cloudOpen(cloud.name, { keepNav:true, skipConfirm:true, keepView:true }); });
+
+/* ---- 提案（AI などから。人が承認するまでマップには反映されない） ---- */
+function setProposalCount(n){
+  openProposals=n;
+  const b=document.getElementById("btnProposals");
+  b.style.display = CLOUD && n>0 ? "inline-flex" : "none";
+  b.textContent = "💡 提案 "+n;
+}
+const propBg=document.getElementById("propBg");
+function closeProposals(){ propBg.classList.remove("show"); }
+async function openProposalsDialog(){
+  propBg.classList.add("show");
+  const list=document.getElementById("propList");
+  list.innerHTML='<div id="mapEmpty">読み込み中…</div>';
+  let r; try{ r=await api("GET", "/api/maps/"+encodeURIComponent(cloud.name)+"/proposals?status=open"); }catch(_){ return; }
+  if(!r.ok){ list.innerHTML='<div id="mapEmpty">取得に失敗しました（'+esc(errMsg(r))+'）</div>'; return; }
+  const ps=r.data.proposals||[];
+  setProposalCount(ps.length);
+  if(!ps.length){ list.innerHTML='<div id="mapEmpty">未処理の提案はありません</div>'; return; }
+  list.innerHTML=ps.map(p=>`<div class="prop" data-id="${esc(p.id)}">`
+    +`<div class="ps">${esc(p.summary)}</div>`
+    +`<div class="pm">${esc(p.created_by)} ・ ${esc(fmtTime(p.created_at))} ・ v${esc(p.base_version)} 時点の提案</div>`
+    +`<ul>${p.changes.map(c=>`<li>${esc(c)}</li>`).join("")}</ul>`
+    +`<div class="pa"><button class="tb" data-act="approve">承認して反映</button><button class="tb ghost" data-act="reject">却下</button></div></div>`).join("");
+}
+document.getElementById("btnProposals").addEventListener("click", openProposalsDialog);
+document.getElementById("btnCloseProp").addEventListener("click", closeProposals);
+propBg.addEventListener("pointerdown", e=>{ if(e.target===propBg) closeProposals(); });
+document.getElementById("propList").addEventListener("click", async e=>{
+  const b=e.target.closest("button[data-act]"); if(!b) return;
+  const id=b.closest(".prop").dataset.id;
+  const approve=b.dataset.act==="approve";
+  if(approve && isDirty()){ toast("未保存の変更があります。先に 💾 保存してから承認してください"); return; }
+  let reason="";
+  if(!approve){ const v=prompt("却下の理由（任意）",""); if(v===null) return; reason=v; }
+  b.disabled=true;
+  let r; try{ r=await api("POST", "/api/proposals/"+encodeURIComponent(id)+"/"+(approve?"approve":"reject"), { reason }); }catch(_){ return; }
+  if(!r.ok){ toast((approve?"反映":"却下")+"できませんでした： "+errMsg(r)); b.disabled=false; return; }
+  if(approve){ await cloudOpen(cloud.name, { keepNav:true, skipConfirm:true, keepView:true, quiet:true }); toast("提案を反映しました（v"+r.data.version+"）"); }
+  else toast("提案を却下しました");
+  openProposalsDialog();
+});
+window.addEventListener("keydown", e=>{ if(propBg.classList.contains("show") && e.key==="Escape"){ closeProposals(); e.stopImmediatePropagation(); } }, true);
 
 /* ========================= boot ========================= */
 async function boot(){
@@ -1317,6 +1481,7 @@ async function cloudBoot(me){
   const q=new URLSearchParams(location.search).get("map");
   let last=null; try{ last=localStorage.getItem("strategyMapCloudName"); }catch(_){}
   const name=q || last || DEFAULT_MAP;
+  const focus=new URLSearchParams(location.search).get("node");
   let ok=await cloudOpen(name, { silentMissing:true, skipConfirm:true });
   if(!ok && !q && name!==DEFAULT_MAP) ok=await cloudOpen(DEFAULT_MAP, { silentMissing:true, skipConfirm:true });
   if(!ok){
@@ -1332,6 +1497,7 @@ async function cloudBoot(me){
     }
   }
   try{ localStorage.removeItem("strategyMapRescue"); }catch(_){}
+  if(focus) focusNode(focus);
 }
 
 function localBoot(){

@@ -2,7 +2,10 @@
 
 「左下の複数スタート → 集約 → 右上のゴール」で戦略を描く社内ツールの**共有版**。
 Google Workspace（blink-consulting.jp）でログインして使い、マップはチームで共有・履歴付きで保存される。
-ノードに Jira の課題キーを書くと、状態・担当・期限・子課題の進捗が Jira から自動で表示される。
+ノードに Jira の課題キーを書くと、Jira の状態・子課題の進捗を参考表示し、マップとのずれを知らせる。
+
+> **マップが正典。** 完了・担当・期限などマップの中身を変えるのは人の判断だけ。
+> Jira の値でマップが書き換わることはなく、AI は「人に頼まれた編集」か「提案（人が承認するまで反映されない）」しかできない。
 
 - ランタイム: Cloudflare Workers（TypeScript / wrangler）＋ Workers Static Assets（画面）
 - 保存先: Cloudflare D1（最新版 `maps` ＋ 全履歴 `map_versions`）
@@ -29,12 +32,17 @@ Claude Code / スクリプト ─(X-API-Key)─┘  それ以外: public/index.h
 | 新規 / 取込 | 一覧の「＋ 新規」、または「⇧ JSONを取込」で手元の JSON を読み込んで保存 |
 | 下位マップへ | ノードの「リンク先マップ」にマップ名を書くと、ダブルクリックで潜れる（「← 戻る」で上位へ） |
 | Jira 連携 | ノード編集の「Jira キー」に `MEDS-21` などを入れる。「⟳ Jira」で手動更新（5分ごとに自動更新） |
+| 提案の承認 | AI などからの提案があるとツールバーに「💡 提案 N」。変更内容を見て「承認して反映」か「却下」 |
+| 他の人の更新 | 開いている間に誰か（や AI）が保存すると、自動で取り込む（自分に未保存の変更があれば知らせるだけ） |
+| ノードを直接開く | URL `?map=<マップ名>&node=<ノードID>`（点検レポートのリンクはこの形） |
 
-### Jira 連携の表示ルール
+### Jira 連携の表示ルール（Jira は参考表示）
 - 丸の下に **キー・状態** のチップ（未着手=灰 / 進行中=青 / 完了=緑 / 見つからない=赤）
 - 子課題（エピック配下・サブタスク）があれば **緑の進捗リング** と `2/4` 表示
-- **完了**: ノードの完了日が空で、Jira が「完了」カテゴリなら、解決日を完了日として ✓ 表示
-- **担当・期限**: ノードに書いていなければ Jira の値を表示（ノードに書いた値が優先）
+- **完了・担当・期限はマップに書いた値だけ**を表示する（Jira の値で上書きしない）
+- マップと Jira が食い違うと、チップに **≠**（オレンジ枠）。ノード編集の Jira 欄に「ずれ」と、
+  人が押したときだけ反映する「完了にする」「Jiraの担当にする」などのボタンが出る（反映後に 💾 保存で確定）
+- 認証に失敗しているときは「Jiraの認証に失敗しています」と出る（ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN を確認）
 - 期限切れの期限は赤字
 
 ---
@@ -87,7 +95,37 @@ npm run maps -- push ~/strategy-map/*.json
 
 ---
 
-## Claude Code から編集する
+## AI から使う（MCPハブ = blink-tools コネクタ）
+
+MCPハブ（`../mcp`）に戦略マップの道具が入っている。claude.ai・Claude Code・定期タスク・Slack の社内AIのどこからでも使える。
+MCPハブ → 戦略マップは service binding（`StrategyMapService` の RPC）で、公開URLや鍵は使わない。
+
+| ツール | 内容 | マップを変えるか |
+|---|---|---|
+| `strategy_map_list` | 一覧 | — |
+| `strategy_map_get` | AI 向けの要約（ノード・状態・担当・期限・Jira の状態・矢印） | — |
+| `strategy_map_edit` | 操作単位の編集。**人が明示的に頼んだときだけ**使う。履歴に「claude（依頼: ○○）」 | 変える |
+| `strategy_map_propose` | 提案を登録。人が画面で承認したときだけ反映 | 変えない |
+| `strategy_map_check` | 点検（期限切れ・7日以内・Jira とのずれ・停滞14日・無いキー・未処理の提案）。Slack に貼れる文章で返す | — |
+| `strategy_map_history` | 変更履歴と提案の一覧 | — |
+
+編集は JSON 丸ごとではなく **操作（ops）** で行う。サーバーで最新版に当てて検証するので、他の人の変更を巻き戻さない。
+```jsonc
+[
+  { "op": "update_node", "id": "pacs", "set": { "done": "2026-10-16" } },
+  { "op": "add_node", "label": "品川で\n運用が\n回っている", "from": ["shina_run"], "to": ["shina_ok"] },
+  { "op": "connect", "from": "sec", "to": "koiwa_big" },
+  { "op": "disconnect", "from": "a", "to": "b" },
+  { "op": "remove_node", "id": "old" },
+  { "op": "set_meta", "title": "…", "titleBlock": { "date": "2027-03-31" } }
+]
+```
+- 循環・存在しないノード・不正な日付/キーは保存しない（エラー）
+- 長すぎるラベル・体言止め・行き止まりは保存したうえで「注意」として返す（触ったノードについてだけ）
+- AI が追加したノードは座標を持たず、画面がつながるノードの近くに置く（他のノードの配置は動かさない）
+- 提案の承認・却下はログインした人だけ（APIキー・RPC からはできない）
+
+## Claude Code から JSON で編集する（従来の方法）
 
 `scripts/maps.mjs` で共有版と手元の JSON を往復できる。JSON の書き方は [`CLAUDE.md`](./CLAUDE.md)。
 
@@ -124,7 +162,12 @@ npm run maps -- push ./maps/strategy-map.json
 | GET | `/api/me` | ログイン中のユーザー |
 | GET | `/api/maps` | 一覧 |
 | GET | `/api/maps/:name` | 最新版 `{ name, version, updated_at, updated_by, map }` |
-| PUT | `/api/maps/:name` | 保存 `{ map, baseVersion }`（新規は 0）。競合は 409 ＋ `currentVersion` |
+| GET | `/api/maps/:name/head` | 版番号と未処理の提案数だけ（画面の更新チェック用） |
+| PUT | `/api/maps/:name` | 保存 `{ map, baseVersion, note? }`（新規は 0）。競合は 409 ＋ `currentVersion` |
+| POST | `/api/maps/:name/ops` | 操作単位の編集 `{ ops, note? }`（最新版に当てる） |
+| GET / POST | `/api/maps/:name/proposals` | 提案の一覧（`?status=open\|approved\|rejected\|all`）／登録 `{ ops, summary }` |
+| POST | `/api/proposals/:id/approve` ・ `/reject` | 提案の承認・却下（ログインした人のみ） |
+| GET | `/api/check` | 点検レポート（`?maps=a.json,b.json` で絞り込み） |
 | DELETE | `/api/maps/:name?version=N` | 削除（履歴には残る） |
 | GET | `/api/maps/:name/versions` | 履歴一覧 |
 | GET | `/api/maps/:name/versions/:v` | 履歴の特定版 |
@@ -150,12 +193,16 @@ strategy-map/
 ├── src/
 │   ├── index.ts           # ルーティング・認証ゲート・CSRF
 │   ├── auth.ts            # Google Workspace SSO・セッション
-│   ├── maps.ts            # マップ保存API（D1・楽観ロック・履歴）
+│   ├── maps.ts            # マップの HTTP API
+│   ├── store.ts           # D1 の読み書き（楽観ロック・履歴・ops 編集・提案）
+│   ├── model.ts           # 検証・ops の適用・注意（lint）・AI 向け要約
+│   ├── check.ts           # 点検レポート
+│   ├── rpc.ts             # MCPハブ向け RPC（StrategyMapService）
 │   ├── jira.ts            # Jira 課題の状態取得
 │   ├── crypto.ts          # 署名トークン・PKCE
 │   ├── http.ts            # レスポンス・Cookie
 │   └── config.ts          # 環境変数
-├── migrations/0001_init.sql
+├── migrations/            # 0001 マップと履歴 / 0002 提案・変更メモ
 ├── scripts/maps.mjs       # pull / push CLI
 └── wrangler.jsonc
 ```

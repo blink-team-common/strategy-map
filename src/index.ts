@@ -4,17 +4,22 @@
  *   /auth/*     Google Workspace SSO（auth.ts）
  *   /healthz    死活監視（認証なし）
  *   /api/me     ログイン中のユーザー
- *   /api/maps/* マップの保存・履歴（maps.ts / D1）
+ *   /api/maps/* マップの保存・操作単位の編集・履歴・提案（maps.ts / store.ts / D1）
+ *   /api/proposals/:id/(approve|reject) 提案の承認・却下（人のみ）
+ *   /api/check  点検レポート（check.ts）
  *   /api/jira/* Jira 課題の状態取得（jira.ts）
  *   それ以外     画面（public/ の静的ファイル）。未ログインならログインへリダイレクト
  *
  * 画面もAPIもすべてログイン必須（静的ファイルも run_worker_first で必ずここを通る）。
+ * MCPハブからは名前付きエントリポイント StrategyMapService（rpc.ts）を service binding で呼ぶ。
  */
+
+export { StrategyMapService } from "./rpc";
 
 import type { Env, User } from "./config";
 import { currentUser, handleAuth } from "./auth";
 import { apiError, json, redirect, SECURITY_HEADERS } from "./http";
-import { handleMaps } from "./maps";
+import { handleCheck, handleMaps, handleProposalDecision } from "./maps";
 import { handleJira } from "./jira";
 
 export default {
@@ -59,6 +64,10 @@ async function routeApi(req: Request, env: Env, user: User, path: string): Promi
       return json({ email: user.email, name: user.name, picture: user.picture ?? null, via: user.via });
     case "maps":
       return handleMaps(req, env, user, parts);
+    case "proposals":
+      return handleProposalDecision(req, env, user, parts);
+    case "check":
+      return req.method === "GET" ? handleCheck(req, env) : apiError(405, "method_not_allowed", "GET のみ");
     case "jira":
       return handleJira(req, env, parts);
     default:

@@ -31,6 +31,8 @@
     // Jira Cloud のURL。
     "ATLASSIAN_BASE_URL": "https://blink-consulting.atlassian.net",
     // ログインの有効時間（時間）。
-    "SESSION_HOURS": "12"
+    "SESSION_HOURS": "12",
+    // 公開URL（点検レポートや MCP ツールが返すリンクに使う）。
+    "PUBLIC_URL": "https://blink-strategy-map.blink-tools.workers.dev"
   }
 }

@@ -9,6 +9,8 @@ export interface Env {
   ALLOWED_DOMAIN: string;
   ATLASSIAN_BASE_URL?: string;
   SESSION_HOURS?: string;
+  /** 公開URL（点検レポートや MCP ツールの返すリンクに使う） */
+  PUBLIC_URL?: string;
 
   // --- secrets ---
   GOOGLE_CLIENT_ID?: string;
