@@ -14,12 +14,12 @@
     "run_worker_first": true
   },
   // マップ本体と変更履歴の保存先。
-  // 初回だけ `npx wrangler d1 create strategy-map` を実行し、表示された database_id をここに貼る。
+  // D1 strategy-map（2026-10-17 作成、APAC）。
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "strategy-map",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "1e61818f-c2e9-4e4a-9ee9-c9f584ca10f9",
       "migrations_dir": "migrations"
     }
   ],
