@@ -9,6 +9,16 @@ export const KINDS = ["start", "task", "milestone", "goal"] as const;
 export type Kind = (typeof KINDS)[number];
 export const JIRA_KEY_RE = /^[A-Z][A-Z0-9_]+-\d+$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_JIRA_PER_NODE = 20;
+
+/**
+ * ノードの jira を課題キーの配列にする。
+ * 配列・文字列1件・「MEDS-21, MEDS-22」のような区切り文字列のどれでも受ける（大文字化・重複除去）。
+ */
+export function jiraKeys(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v.flatMap((x) => String(x ?? "").split(/[\s,、，]+/)) : String(v ?? "").split(/[\s,、，]+/);
+  return [...new Set(raw.map((k) => k.trim().toUpperCase()).filter(Boolean))];
+}
 
 export interface MapNode {
   id: string;
@@ -19,7 +29,8 @@ export interface MapNode {
   kind: Kind;
   note?: string;
   link?: string;
-  jira?: string;
+  /** Jira 課題キー。複数可（配列）。古いデータの文字列1件も読める */
+  jira?: string[] | string;
   x?: number;
   y?: number;
 }
@@ -47,7 +58,10 @@ export function validateMap(m: any): string | null {
     if (ids.has(n.id)) return `ノードIDが重複しています: ${n.id}`;
     ids.add(n.id);
     if (n.kind !== undefined && !(KINDS as readonly string[]).includes(n.kind)) return `kind が不正です: ${n.id}`;
-    if (n.jira !== undefined && n.jira !== "" && !JIRA_KEY_RE.test(String(n.jira))) return `Jiraキーの形式が不正です: ${n.jira}`;
+    const keys = jiraKeys(n.jira);
+    const bad = keys.find((k) => !JIRA_KEY_RE.test(k));
+    if (bad) return `Jiraキーの形式が不正です: ${bad}（${n.id}）`;
+    if (keys.length > MAX_JIRA_PER_NODE) return `Jiraキーは1ノード${MAX_JIRA_PER_NODE}件までです（${n.id}）`;
     for (const f of ["due", "done"] as const) {
       if (n[f] !== undefined && n[f] !== "" && !DATE_RE.test(String(n[f]))) return `${f} は YYYY-MM-DD 形式です: ${n.id}`;
     }
@@ -146,7 +160,8 @@ export type Op =
       due?: string;
       done?: string;
       note?: string;
-      jira?: string;
+      /** Jira 課題キー（配列、または「A-1, B-2」の区切り文字列） */
+      jira?: string[] | string;
       link?: string;
       /** このノードへ矢印を引く元（前提）のノードID */
       from?: string[];
@@ -202,7 +217,13 @@ export function applyOps(src: StrategyMap, ops: Op[]): { map: StrategyMap; chang
         if (!/^[A-Za-z0-9_\-]{1,40}$/.test(id)) throw new OpError(`${where}: id は英数字・_・- で40文字まで`);
         if (m.nodes.some((n) => n.id === id)) throw new OpError(`${where}: id ${id} は既にあります`);
         const n: MapNode = { id, label: op.label, kind: op.kind ?? "task" };
-        for (const f of NODE_FIELDS) if (f !== "label" && f !== "kind" && op[f] !== undefined && op[f] !== "") (n as any)[f] = String(op[f]);
+        for (const f of NODE_FIELDS) {
+          if (f === "label" || f === "kind" || op[f] === undefined || op[f] === "") continue;
+          if (f === "jira") {
+            const keys = jiraKeys(op.jira);
+            if (keys.length) n.jira = keys;
+          } else (n as any)[f] = String(op[f]);
+        }
         m.nodes.push(n);
         changes.push(`追加: 「${oneLine(n.label)}」(${id})`);
         for (const f of op.from ?? []) if (addEdge(f, id)) changes.push(`接続: ${name(f)} → 「${oneLine(n.label)}」`);
@@ -215,6 +236,15 @@ export function applyOps(src: StrategyMap, ops: Op[]): { map: StrategyMap; chang
         const diffs: string[] = [];
         for (const [k, v] of Object.entries(set)) {
           if (!(NODE_FIELDS as readonly string[]).includes(k)) throw new OpError(`${where}: ${k} は変更できない項目です`);
+          if (k === "jira") {
+            const before = jiraKeys(n.jira);
+            const after = jiraKeys(v);
+            if (before.join(",") === after.join(",")) continue;
+            if (after.length) n.jira = after;
+            else delete n.jira;
+            diffs.push(`Jira: ${fmt(before.join(", "))} → ${fmt(after.join(", "))}`);
+            continue;
+          }
           const before = (n as any)[k] ?? "";
           const after = v === null || v === undefined ? "" : String(v);
           if (before === after) continue;
@@ -289,10 +319,12 @@ export function summarizeMap(
   if (m.titleBlock?.name || m.titleBlock?.date) lines.push(`表題欄: ${m.titleBlock?.title ?? ""} ／ ${m.titleBlock?.name ?? ""} ／ ${m.titleBlock?.date ?? ""}`);
   lines.push("", "## ノード（id | 種別 | ラベル | 状態 | 担当 | 期限 | Jira | 下位マップ）");
   for (const n of m.nodes) {
-    const j = n.jira ? jira[n.jira] : undefined;
-    const jiraTxt = n.jira
-      ? `${n.jira}${j ? `:${j.status}${j.children.total ? ` 子${j.children.done}/${j.children.total}` : ""}` : ""}`
-      : "";
+    const jiraTxt = jiraKeys(n.jira)
+      .map((k) => {
+        const j = jira[k];
+        return `${k}${j ? `:${j.status}${j.children.total ? ` 子${j.children.done}/${j.children.total}` : ""}` : ""}`;
+      })
+      .join(", ");
     lines.push(
       [
         n.id,

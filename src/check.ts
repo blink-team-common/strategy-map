@@ -11,7 +11,7 @@
 
 import type { Env } from "./config";
 import { fetchJira, normalizeKeys } from "./jira";
-import { oneLine, type MapNode } from "./model";
+import { jiraKeys, oneLine, type MapNode } from "./model";
 import { getMap, listMaps, listProposals } from "./store";
 
 const DAY = 86_400_000;
@@ -47,7 +47,7 @@ export async function runCheck(env: Env, names?: string[] | null, origin = "") {
   const soon = addDays(today, 7);
   const items: CheckItem[] = [];
 
-  const keys = normalizeKeys(maps.flatMap((m) => m.map.nodes.map((n) => n.jira).filter(Boolean)));
+  const keys = normalizeKeys(maps.flatMap((m) => m.map.nodes.flatMap((n) => jiraKeys(n.jira))));
   const jr = keys.length ? await fetchJira(env, keys) : null;
   const jira = jr && jr.ok ? jr.issues : {};
   const jiraNote = jr && !jr.ok ? jr.message : null;
@@ -62,22 +62,35 @@ export async function runCheck(env: Env, names?: string[] | null, origin = "") {
       if (!done && n.due && n.due < today) push("overdue", n, `期限 ${n.due}${n.assignee ? `・${n.assignee}` : ""}`);
       else if (!done && n.due && n.due <= soon) push("due_soon", n, `期限 ${n.due}${n.assignee ? `・${n.assignee}` : ""}`);
 
-      if (!n.jira) continue;
-      if (jr && jr.ok && jr.missing.includes(n.jira)) {
-        push("jira_missing", n, `${n.jira} が Jira に見つかりません（キー違い・権限なし）`);
-        continue;
+      // 1ノードに複数の Jira 課題を紐付けられる。判定は「マップが正典」のまま、食い違いだけを挙げる。
+      const nkeys = jiraKeys(n.jira);
+      if (!nkeys.length) continue;
+      if (jr && jr.ok) for (const k of nkeys.filter((k) => jr.missing.includes(k))) push("jira_missing", n, `${k} が Jira に見つかりません（キー違い・権限なし）`);
+      const found = nkeys.filter((k) => jira[k]);
+      if (!found.length) continue;
+      const label = (ks: string[]) => (ks.length <= 3 ? ks.join("・") : `${ks.slice(0, 3).join("・")} 他${ks.length - 3}件`);
+      const notDone = found.filter((k) => jira[k].category !== "done");
+      // 完了: 紐付けた課題が「全部」完了なのにマップが未完了 / マップが完了なのに未完了の課題がある
+      if (!done && !notDone.length && found.length === nkeys.length) {
+        const last = found.map((k) => jira[k].resolutiondate ?? "").sort().pop()?.slice(0, 10);
+        push("jira_done_mismatch", n, `マップ：未完了 ／ ${label(found)}：すべて完了${last ? `（最終 ${last}）` : ""}`);
       }
-      const j = jira[n.jira];
-      if (!j) continue;
-      const jDone = j.category === "done";
-      if (jDone && !done) push("jira_done_mismatch", n, `マップ：未完了 ／ ${n.jira}：${j.status}${j.resolutiondate ? `（${j.resolutiondate.slice(0, 10)}）` : ""}`);
-      if (!jDone && done) push("jira_done_mismatch", n, `マップ：完了(${n.done}) ／ ${n.jira}：${j.status}`);
-      if (n.assignee && j.assignee && !sameperson(n.assignee, j.assignee)) push("jira_assignee_mismatch", n, `担当 マップ：${n.assignee} ／ ${n.jira}：${j.assignee}`);
-      if (n.assignee && !j.assignee) push("jira_assignee_mismatch", n, `担当 マップ：${n.assignee} ／ ${n.jira}：未割当`);
-      if (n.due && j.duedate && n.due !== j.duedate) push("jira_due_mismatch", n, `期限 マップ：${n.due} ／ ${n.jira}：${j.duedate}`);
-      if (!done && j.category === "indeterminate" && j.updated) {
-        const days = Math.floor((Date.now() - Date.parse(j.updated)) / DAY);
-        if (days >= 14) push("stale", n, `${n.jira}（${j.status}）が ${days}日 更新なし`);
+      if (done && notDone.length) push("jira_done_mismatch", n, `マップ：完了(${n.done}) ／ 未完了の課題 ${label(notDone.map((k) => `${k}:${jira[k].status}`))}`);
+      // 担当: マップの担当が、どの課題の担当とも一致しないとき
+      const assignees = [...new Set(found.map((k) => jira[k].assignee).filter((a): a is string => !!a))];
+      if (n.assignee && assignees.length && !assignees.some((a) => sameperson(n.assignee!, a))) push("jira_assignee_mismatch", n, `担当 マップ：${n.assignee} ／ Jira：${assignees.join("・")}`);
+      if (n.assignee && !assignees.length) push("jira_assignee_mismatch", n, `担当 マップ：${n.assignee} ／ ${label(found)}：未割当`);
+      // 期限: 課題の中で一番遅い期限と比べる
+      const lastDue = found.map((k) => jira[k].duedate ?? "").filter(Boolean).sort().pop();
+      if (n.due && lastDue && n.due !== lastDue) push("jira_due_mismatch", n, `期限 マップ：${n.due} ／ Jira（最も遅い期限）：${lastDue}`);
+      // 停滞: 進行中のまま14日以上更新のない課題（課題ごと）
+      if (!done) {
+        for (const k of found) {
+          const j = jira[k];
+          if (j.category !== "indeterminate" || !j.updated) continue;
+          const days = Math.floor((Date.now() - Date.parse(j.updated)) / DAY);
+          if (days >= 14) push("stale", n, `${k}（${j.status}）が ${days}日 更新なし`);
+        }
       }
     }
   }

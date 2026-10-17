@@ -10,7 +10,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./config";
 import { runCheck } from "./check";
 import { fetchJira } from "./jira";
-import { summarizeMap, type Op } from "./model";
+import { jiraKeys, summarizeMap, type Op } from "./model";
 import { createProposal, editMap, getMap, listMaps, listProposals, listVersions, validName } from "./store";
 
 function actor(requestedBy: unknown): string | null {
@@ -38,7 +38,7 @@ export class StrategyMapService extends WorkerEntrypoint<Env> {
     const rec = await getMap(this.env, name);
     if (!rec) return { ok: false, code: "not_found", message: `マップ「${name}」はありません` };
     if (format === "json") return { ok: true, url: this.url(name), ...rec };
-    const keys = rec.map.nodes.map((n) => n.jira).filter(Boolean);
+    const keys = rec.map.nodes.flatMap((n) => jiraKeys(n.jira));
     const jr = keys.length ? await fetchJira(this.env, keys) : null;
     const text = summarizeMap(name, rec.map, rec.version, jr && jr.ok ? jr.issues : {});
     const props = await listProposals(this.env, name, "open");

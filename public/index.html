@@ -131,6 +131,9 @@
   .jira-meta .st{ display:inline-block; padding:1px 7px; border-radius:8px; font-weight:600; }
   .jira-meta .drift{ margin-top:6px; padding:6px 8px; border:1px solid #6b4a1f; background:#2a1d0f; border-radius:8px; color:#f6c48f; }
   .jira-meta .drow{ margin-top:4px; }
+  .jira-meta .jrow{ padding:3px 0; border-bottom:1px dashed #2b3654; }
+  .jira-meta .jrow:last-of-type{ border-bottom:none; }
+  .jira-meta .jsub{ color:#93a0be; }
   .jira-meta .dbtn{ margin-left:4px; font-size:11px; padding:2px 7px; border-radius:6px; border:1px solid #f2994a; background:transparent; color:#f6c48f; cursor:pointer; font-family:var(--font); }
   .jira-meta .dbtn:hover{ background:#f2994a; color:#231a00; }
   #btnProposals{ border-color:#a06bff; }
@@ -238,7 +241,7 @@
         </div>
       </div>
       <div class="field"><label>メモ</label><textarea id="fNote" rows="3"></textarea></div>
-      <div class="field"><label>🎫 Jira キー（入れると状態・担当・期限・進捗をJiraから表示）</label><input id="fJira" spellcheck="false" placeholder="例: MEDS-21" autocomplete="off"><div id="fJiraMeta" class="jira-meta"></div></div>
+      <div class="field"><label>🎫 Jira キー（複数はカンマ区切り。状態・進捗とマップとのずれを表示）</label><input id="fJira" spellcheck="false" placeholder="例: MEDS-21, KNOW-5" autocomplete="off"><div id="fJiraMeta" class="jira-meta"></div></div>
       <div class="field"><label>🔗 リンク先マップ（マップ名／ダブルクリックで開く）</label><input id="fLink" spellcheck="false" placeholder="例: sub-map.json"></div>
       <button id="delNode">🗑 このノードを削除</button>
     </div>
@@ -375,22 +378,47 @@ function samePerson(a,b){
   const x=String(a||"").replace(/\s|さん/g,""), y=String(b||"").replace(/\s|さん/g,"");
   return !!x && !!y && (x.includes(y) || y.includes(x));
 }
+/** ノードの Jira キー（配列）。「A-1, B-2」のような文字列や古い1件の文字列も受ける */
+function parseJiraKeys(v){
+  const raw = Array.isArray(v) ? v.flatMap(x=>String(x??"").split(/[\s,、，]+/)) : String(v??"").split(/[\s,、，]+/);
+  return [...new Set(raw.map(k=>k.trim().toUpperCase()).filter(k=>/^[A-Z][A-Z0-9_]+-\d+$/.test(k)))];
+}
+function nodeKeys(n){ return Array.isArray(n.jira) ? n.jira : parseJiraKeys(n.jira); }
 function effective(n){
-  const ji = n.jira ? jira[n.jira] : null;
+  const keys = nodeKeys(n);
+  const found = keys.filter(k=>jira[k]);
+  const jis = found.map(k=>jira[k]);
+  const ji = keys.length===1 ? (jira[keys[0]]||null) : null;   // 1件のときは今まで通りの表示
   const done = !!(n.done && String(n.done).trim());
   const drift = [];   // { text, field?, value? }  field があれば「マップに反映」できる
-  if(ji){
-    const jDone = ji.category==="done";
-    const jDate = ji.resolutiondate ? ji.resolutiondate.slice(0,10) : "";
-    if(jDone && !done) drift.push({ text:`Jira は「${ji.status}」${jDate?`（${jDate}）`:""}／マップは未完了`, field:"done", value: jDate || todayStr(), label:"完了にする" });
-    if(!jDone && done) drift.push({ text:`マップは完了／Jira は「${ji.status}」` });
-    if(ji.assignee && !n.assignee) drift.push({ text:`担当：マップは空／Jira は ${ji.assignee}`, field:"assignee", value: ji.assignee, label:"担当を入れる" });
-    else if(n.assignee && ji.assignee && !samePerson(n.assignee, ji.assignee)) drift.push({ text:`担当：マップ ${n.assignee}／Jira ${ji.assignee}`, field:"assignee", value: ji.assignee, label:"Jiraの担当にする" });
-    else if(n.assignee && !ji.assignee) drift.push({ text:`担当：マップ ${n.assignee}／Jira は未割当` });
-    if(ji.duedate && !n.due) drift.push({ text:`期限：マップは空／Jira は ${ji.duedate}`, field:"due", value: ji.duedate, label:"期限を入れる" });
-    else if(n.due && ji.duedate && n.due!==ji.duedate) drift.push({ text:`期限：マップ ${n.due}／Jira ${ji.duedate}`, field:"due", value: ji.duedate, label:"Jiraの期限にする" });
+  if(jis.length){
+    const notDone = found.filter(k=>jira[k].category!=="done");
+    const tag = keys.length===1 ? "Jira" : "Jira（全"+keys.length+"件）";
+    // 完了：紐付けた課題が全部完了なのにマップが未完了 ／ マップが完了なのに未完了の課題がある
+    if(!done && !notDone.length && found.length===keys.length){
+      const last = jis.map(j=>(j.resolutiondate||"").slice(0,10)).filter(Boolean).sort().pop()||"";
+      drift.push({ text:`${tag} はすべて完了${last?`（最終 ${last}）`:""}／マップは未完了`, field:"done", value: last || todayStr(), label:"完了にする" });
+    }
+    if(done && notDone.length) drift.push({ text:`マップは完了／未完了の課題 ${notDone.map(k=>k+"「"+jira[k].status+"」").join("・")}` });
+    // 担当：マップの担当が、どの課題の担当とも一致しないとき
+    const assignees=[...new Set(jis.map(j=>j.assignee).filter(Boolean))];
+    if(!n.assignee && assignees.length===1) drift.push({ text:`担当：マップは空／Jira は ${assignees[0]}`, field:"assignee", value: assignees[0], label:"担当を入れる" });
+    else if(n.assignee && assignees.length && !assignees.some(a=>samePerson(n.assignee,a)))
+      drift.push(assignees.length===1
+        ? { text:`担当：マップ ${n.assignee}／Jira ${assignees[0]}`, field:"assignee", value: assignees[0], label:"Jiraの担当にする" }
+        : { text:`担当：マップ ${n.assignee}／Jira ${assignees.join("・")}` });
+    else if(n.assignee && !assignees.length) drift.push({ text:`担当：マップ ${n.assignee}／Jira は未割当` });
+    // 期限：課題の中で一番遅い期限と比べる
+    const lastDue = jis.map(j=>j.duedate||"").filter(Boolean).sort().pop()||"";
+    const dueTag = keys.length===1 ? "Jira" : "Jira（最も遅い期限）";
+    if(lastDue && !n.due) drift.push({ text:`期限：マップは空／${dueTag} ${lastDue}`, field:"due", value: lastDue, label:"期限を入れる" });
+    else if(n.due && lastDue && n.due!==lastDue) drift.push({ text:`期限：マップ ${n.due}／${dueTag} ${lastDue}`, field:"due", value: lastDue, label:"Jiraの期限にする" });
   }
-  return { ji, done, doneDate: done ? n.done : "", assignee: n.assignee||"", due: n.due||"", drift };
+  // 進捗リング：1件なら子課題の割合、複数なら紐付けた課題のうち完了の割合
+  let ring=null;
+  if(ji && ji.children && ji.children.total) ring={ done:ji.children.done, total:ji.children.total };
+  else if(keys.length>1 && jis.length) ring={ done:jis.filter(j=>j.category==="done").length, total:keys.length };
+  return { keys, ji, jis, ring, done, doneDate: done ? n.done : "", assignee: n.assignee||"", due: n.due||"", drift };
 }
 const JIRA_COLORS = {
   done:          { bg:"#10301f", border:"#2fbf71", fg:"#86e5ad" },
@@ -400,15 +428,26 @@ const JIRA_COLORS = {
   pending:       { bg:"#161d2e", border:"#2b3654", fg:"#93a0be" },
   drift:         { border:"#f2994a" }
 };
-function jiraChip(key, ji, drift){
-  if(ji){
-    const c = JIRA_COLORS[ji.category] || JIRA_COLORS.new;
-    const prog = ji.children && ji.children.total ? `  ${ji.children.done}/${ji.children.total}` : "";
-    if(drift && drift.length) return { text:`≠ ${key}  ${ji.status}${prog}`, ...c, border: JIRA_COLORS.drift.border };
-    return { text:`${key}  ${ji.status}${prog}`, ...c };
+function jiraChip(ev){
+  const keys=ev.keys, drift=ev.drift;
+  const mark = drift && drift.length ? "≠ " : "";
+  const withDrift = c => drift && drift.length ? { ...c, border: JIRA_COLORS.drift.border } : c;
+  if(keys.length===1){
+    const key=keys[0], ji=ev.ji;
+    if(ji){
+      const prog = ji.children && ji.children.total ? `  ${ji.children.done}/${ji.children.total}` : "";
+      return withDrift({ text:`${mark}${key}  ${ji.status}${prog}`, ...(JIRA_COLORS[ji.category] || JIRA_COLORS.new) });
+    }
+    if(jiraMissing.has(key)) return { text:`${key}  見つかりません`, ...JIRA_COLORS.missing };
+    return { text:key, ...JIRA_COLORS.pending };
   }
-  if(jiraMissing.has(key)) return { text:`${key}  見つかりません`, ...JIRA_COLORS.missing };
-  return { text:key, ...JIRA_COLORS.pending };
+  // 複数：先頭のキー＋件数、完了数。色は「全部完了=緑／どれか進行中=青／それ以外=灰」
+  const head = `${keys[0]} 他${keys.length-1}件`;
+  const miss = keys.filter(k=>jiraMissing.has(k)).length;
+  if(!ev.jis.length) return miss ? { text:`${head}  見つかりません`, ...JIRA_COLORS.missing } : { text:head, ...JIRA_COLORS.pending };
+  const doneN = ev.jis.filter(j=>j.category==="done").length;
+  const cat = doneN===keys.length ? "done" : ev.jis.some(j=>j.category==="indeterminate"||j.category==="done") ? "indeterminate" : "new";
+  return withDrift({ text:`${mark}${head}  完了 ${doneN}/${keys.length}${miss?`  ?${miss}`:""}`, ...JIRA_COLORS[cat] });
 }
 function toWorld(e){
   const r = svg.getBoundingClientRect();
@@ -491,8 +530,8 @@ function render(){
     const ev = effective(n);
     const done = ev.done;
     // Jira の子課題（エピック配下など）の進捗リング
-    if(ev.ji && ev.ji.children && ev.ji.children.total){
-      const rr=r+12, frac=ev.ji.children.done/ev.ji.children.total;
+    if(ev.ring){
+      const rr=r+12, frac=ev.ring.done/ev.ring.total;
       s += `<circle cx="${n.x}" cy="${n.y}" r="${rr}" fill="none" stroke="#2b3654" stroke-width="4"></circle>`;
       if(frac>=1) s += `<circle cx="${n.x}" cy="${n.y}" r="${rr}" fill="none" stroke="#2fbf71" stroke-width="4"></circle>`;
       else if(frac>0){
@@ -537,10 +576,10 @@ function render(){
       s += `<text x="${lx}" y="${ly+4}" text-anchor="middle" font-size="12" pointer-events="none">🔗</text>`;
     }
     // Jira チップ（丸の下）：キー・状態・子課題の進捗
-    if(n.jira){
-      const st = jiraChip(n.jira, ev.ji, ev.drift);
+    if(ev.keys.length){
+      const st = jiraChip(ev);
       const tw = measure(st.text, FONT_BADGE) + 14;
-      const cy = n.y + r + (ev.ji && ev.ji.children && ev.ji.children.total ? 26 : 16);
+      const cy = n.y + r + (ev.ring ? 26 : 16);
       chips += `<g data-node="${esc(n.id)}" style="cursor:grab"><rect x="${n.x-tw/2}" y="${cy-9}" width="${tw}" height="18" rx="9" fill="${st.bg}" stroke="${st.border}" stroke-width="1.2"></rect>`;
       chips += `<text class="badge-text" x="${n.x}" y="${cy+4}" text-anchor="middle" fill="${st.fg}">${esc(st.text)}</text></g>`;
     }
@@ -573,30 +612,33 @@ function showInspector(n){
   document.getElementById("fDone").value     = n.done||"";
   document.getElementById("fNote").value     = n.note||"";
   document.getElementById("fLink").value     = n.link||"";
-  if(document.activeElement!==document.getElementById("fJira")) document.getElementById("fJira").value = n.jira||"";
+  if(document.activeElement!==document.getElementById("fJira")) document.getElementById("fJira").value = nodeKeys(n).join(", ");
   updateJiraMeta(n);
   document.querySelectorAll("#fKind button").forEach(b=>b.classList.toggle("on", b.dataset.k===(n.kind||"task")));
 }
 function updateJiraMeta(n){
   const el=document.getElementById("fJiraMeta");
-  if(!n.jira){ el.innerHTML=""; return; }
+  const keys=nodeKeys(n);
+  if(!keys.length){ el.innerHTML=""; return; }
   if(!CLOUD){ el.textContent="Jiraの表示は共有版（ログインして使う版）でのみ動きます"; return; }
-  const ji=jira[n.jira];
-  if(ji){
-    const c=JIRA_COLORS[ji.category]||JIRA_COLORS.new;
-    const prog=ji.children&&ji.children.total?` ／ 子課題 ${ji.children.done}/${ji.children.total} 完了`:"";
-    const drift=effective(n).drift;
-    el.innerHTML=`<span class="st" style="background:${c.bg};color:${c.fg};border:1px solid ${c.border}">${esc(ji.status)}</span> `
-      +`${esc(ji.summary)}${esc(prog)}<br>`
-      +`担当: ${esc(ji.assignee||"未割当")} ／ 期限: ${esc(ji.duedate||"なし")} `
-      +`<a href="${esc(ji.url)}" target="_blank" rel="noopener">Jiraで開く ↗</a>`
-      +(drift.length?`<div class="drift"><b>≠ マップとのずれ</b>（マップが正。必要なら反映）`
-        +drift.map(d=>`<div class="drow">${esc(d.text)}${d.field?` <button class="dbtn" data-field="${esc(d.field)}" data-value="${esc(d.value)}">${esc(d.label)}</button>`:""}</div>`).join("")+`</div>`:"");
-  } else if(jiraMissing.has(n.jira)) el.textContent="この課題はJiraに見つかりません（キーの打ち間違い、または権限なし）";
-  else if(jiraState==="auth") el.textContent="Jiraの認証に失敗しています（Worker の ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN を確認）";
-  else if(jiraState==="off") el.textContent="Jira連携がサーバーで未設定です";
-  else if(jiraState==="error") el.textContent="Jiraの取得に失敗しました（⟳ Jira で再試行）";
-  else el.textContent="Jiraから取得中…";
+  if(jiraState==="auth"){ el.textContent="Jiraの認証に失敗しています（Worker の ATLASSIAN_EMAIL / ATLASSIAN_API_TOKEN を確認）"; return; }
+  if(jiraState==="off"){ el.textContent="Jira連携がサーバーで未設定です"; return; }
+  const rows = keys.map(k=>{
+    const ji=jira[k];
+    if(ji){
+      const c=JIRA_COLORS[ji.category]||JIRA_COLORS.new;
+      const prog=ji.children&&ji.children.total?` ／ 子課題 ${ji.children.done}/${ji.children.total} 完了`:"";
+      return `<div class="jrow"><span class="st" style="background:${c.bg};color:${c.fg};border:1px solid ${c.border}">${esc(ji.status)}</span> `
+        +`<a href="${esc(ji.url)}" target="_blank" rel="noopener">${esc(k)}</a> ${esc(ji.summary)}${esc(prog)}<br>`
+        +`<span class="jsub">担当: ${esc(ji.assignee||"未割当")} ／ 期限: ${esc(ji.duedate||"なし")}</span></div>`;
+    }
+    if(jiraMissing.has(k)) return `<div class="jrow"><span class="st" style="background:#341219;color:#ffb3bb;border:1px solid #ff5d6c">見つかりません</span> ${esc(k)}（キーの打ち間違い、または権限なし）</div>`;
+    return `<div class="jrow">${esc(k)} … ${jiraState==="error"?"取得に失敗しました（⟳ Jira で再試行）":"Jiraから取得中…"}</div>`;
+  }).join("");
+  const drift=effective(n).drift;
+  el.innerHTML = rows
+    +(drift.length?`<div class="drift"><b>≠ マップとのずれ</b>（マップが正。必要なら反映）`
+      +drift.map(d=>`<div class="drow">${esc(d.text)}${d.field?` <button class="dbtn" data-field="${esc(d.field)}" data-value="${esc(d.value)}">${esc(d.label)}</button>`:""}</div>`).join("")+`</div>`:"");
 }
 function hideInspector(){ inspector.classList.remove("show"); }
 // ずれの「反映」ボタン：人が押したときだけ、マップの値を書き換える（保存は 💾）
@@ -631,10 +673,10 @@ function deselect(){ if(!selNodes.size && selEdge===null) return; selNodes.clear
 });
 document.getElementById("fJira").addEventListener("input", e=>{
   const n=selectedNode(); if(!n) return;
-  const v=e.target.value.trim().toUpperCase();
-  n.jira = /^[A-Z][A-Z0-9_]+-\d+$/.test(v) ? v : "";
+  // 書きかけ（「MEDS-」など）は無視し、形式の合うキーだけを持つ
+  n.jira = parseJiraKeys(e.target.value);
   updateJiraMeta(n); render();
-  if(n.jira && !jira[n.jira]) scheduleJira();
+  if(n.jira.some(k=>!jira[k] && !jiraMissing.has(k))) scheduleJira();
 });
 document.querySelectorAll("#fKind button").forEach(b=>{
   b.addEventListener("click", ()=>{
@@ -1040,7 +1082,7 @@ function loadData(obj, {layout=false}={}){
       id: n.id || ("n"+(i+1)),
       label: n.label||"", assignee:n.assignee||"", due:n.due||"", done:n.done||"",
       kind: ["start","task","milestone","goal"].includes(n.kind)?n.kind:"task",
-      note: n.note||"", link: n.link||"", jira: (n.jira||"").toString().trim().toUpperCase(),
+      note: n.note||"", link: n.link||"", jira: parseJiraKeys(n.jira),
       x: typeof n.x==="number"?n.x:undefined,
       y: typeof n.y==="number"?n.y:undefined
     })),
@@ -1160,7 +1202,7 @@ function serialize(){
     titleBlock:data.titleBlock,
     nodes:data.nodes.map(n=>({ id:n.id,label:n.label,assignee:n.assignee,due:n.due,
       ...(n.done?{done:n.done}:{}), kind:n.kind,
-      ...(n.note?{note:n.note}:{}), ...(n.link?{link:n.link}:{}), ...(n.jira?{jira:n.jira}:{}), x:Math.round(n.x),y:Math.round(n.y) })),
+      ...(n.note?{note:n.note}:{}), ...(n.link?{link:n.link}:{}), ...(nodeKeys(n).length?{jira:nodeKeys(n)}:{}), x:Math.round(n.x),y:Math.round(n.y) })),
     edges:data.edges.map(e=>({ from:e.from,to:e.to, ...(e.label?{label:e.label}:{}) }))
   };
 }
@@ -1356,7 +1398,7 @@ let _jT=null;
 function scheduleJira(){ clearTimeout(_jT); _jT=setTimeout(()=>refreshJira(), 700); }
 async function refreshJira(force=false){
   if(!CLOUD) return;
-  const keys=[...new Set(data.nodes.map(n=>n.jira).filter(Boolean))];
+  const keys=[...new Set(data.nodes.flatMap(nodeKeys))];
   if(!keys.length){ jiraState="ok"; return; }
   jiraState="loading";
   let r; try{ r=await api("POST", "/api/jira/issues", { keys, refresh:force }); }catch(_){ return; }
