@@ -1,0 +1,36 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "blink-strategy-map",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-06-01",
+  "observability": {
+    "enabled": true
+  },
+  // 画面（public/index.html）は Workers Static Assets で配信する。
+  // run_worker_first=true で、静的ファイルも必ず Worker の認証チェックを通してから返す。
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // マップ本体と変更履歴の保存先。
+  // 初回だけ `npx wrangler d1 create strategy-map` を実行し、表示された database_id をここに貼る。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "strategy-map",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 非機密の設定値。機密（GOOGLE_CLIENT_SECRET / SESSION_SECRET / ATLASSIAN_API_TOKEN / API_KEY）は
+  // `wrangler secret put` で登録する（README 参照）。
+  "vars": {
+    // ログインを許可する Google Workspace のドメイン（id_token の hd とメールのドメインの両方で検証）。
+    "ALLOWED_DOMAIN": "blink-consulting.jp",
+    // Jira Cloud のURL。
+    "ATLASSIAN_BASE_URL": "https://blink-consulting.atlassian.net",
+    // ログインの有効時間（時間）。
+    "SESSION_HOURS": "12"
+  }
+}

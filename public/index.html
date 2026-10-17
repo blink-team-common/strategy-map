@@ -1,0 +1,1363 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>戦略マップ</title>
+<style>
+  :root{
+    --bg:#0f1420; --panel:#161d2e; --panel2:#1e2740; --line:#2b3654;
+    --text:#e7ecf5; --muted:#93a0be; --accent:#4c7dff;
+    --start:#2e9e5b; --start-bg:#12241a;
+    --task:#4c7dff;  --task-bg:#141d33;
+    --mile:#a06bff;  --mile-bg:#1e1830;
+    --goal:#f2b21a;  --goal-bg:#2a2210;
+    --danger:#ff5d6c;
+    --font: -apple-system, "Segoe UI", "Yu Gothic UI", "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--text); font-family:var(--font); overflow:hidden; }
+  #app{ display:flex; flex-direction:column; height:100%; }
+
+  /* ---- toolbar ---- */
+  #toolbar{
+    display:flex; align-items:center; gap:6px; padding:8px 12px; background:var(--panel);
+    border-bottom:1px solid var(--line); flex-wrap:wrap; z-index:20;
+  }
+  #title{
+    font-size:15px; font-weight:700; background:transparent; border:none; color:var(--text);
+    min-width:180px; padding:6px 8px; border-radius:8px;
+  }
+  #title:focus{ outline:none; background:var(--panel2); }
+  .sep{ width:1px; height:24px; background:var(--line); margin:0 2px; }
+  button.tb{
+    background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    padding:7px 10px; border-radius:9px; font-size:13px; cursor:pointer; font-family:var(--font);
+    display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  }
+  button.tb:hover{ border-color:var(--accent); }
+  button.tb.active{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.tb.ghost{ background:transparent; }
+  select#sizeSel{ background:var(--panel2); color:var(--text); border:1px solid var(--line);
+    padding:7px 8px; border-radius:9px; font-size:13px; font-family:var(--font); cursor:pointer; }
+  select#sizeSel:hover{ border-color:var(--accent); }
+  .grow{ flex:1; }
+  #zoomlabel{ font-size:12px; color:var(--muted); min-width:44px; text-align:center; }
+
+  /* ---- stage ---- */
+  #stage{ position:relative; flex:1; overflow:hidden;
+    background-image:
+      linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+    background-size:26px 26px;
+  }
+  svg#canvas{ width:100%; height:100%; display:block; cursor:default; touch-action:none; }
+  svg#canvas.connect{ cursor:crosshair; }
+  svg#canvas.panning{ cursor:grabbing; }
+
+  .node-label{ font:600 13px var(--font); fill:var(--text); pointer-events:none; }
+  .badge-text{ font:600 11px var(--font); pointer-events:none; }
+  .edge{ fill:none; stroke:var(--muted); stroke-width:2; }
+  .edge.sel{ stroke:var(--accent); stroke-width:3.5; }
+  .edge-hit{ fill:none; stroke:transparent; stroke-width:16; cursor:pointer; }
+
+  /* ---- inspector ---- */
+  #inspector{
+    position:absolute; top:12px; right:12px; width:288px; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; padding:14px; z-index:15;
+    box-shadow:0 12px 40px rgba(0,0,0,.45); display:none;
+  }
+  #inspector.show{ display:block; }
+  #inspector h3{ margin:0 0 10px; font-size:13px; color:var(--muted); font-weight:600; letter-spacing:.03em; }
+  .field{ margin-bottom:10px; }
+  .field label{ display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .field input, .field textarea, .field select{
+    width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    border-radius:8px; padding:8px; font-size:13px; font-family:var(--font); resize:vertical;
+  }
+  .field input:focus,.field textarea:focus,.field select:focus{ outline:none; border-color:var(--accent); }
+  .kindrow{ display:flex; gap:6px; }
+  .kindrow button{ flex:1; padding:7px 0; border-radius:8px; border:1px solid var(--line);
+    background:var(--panel2); color:var(--muted); font-size:11px; cursor:pointer; font-family:var(--font); }
+  .kindrow button.on{ color:#fff; }
+  .kindrow button[data-k="start"].on{ background:var(--start); border-color:var(--start); }
+  .kindrow button[data-k="task"].on{ background:var(--task); border-color:var(--task); }
+  .kindrow button[data-k="milestone"].on{ background:var(--mile); border-color:var(--mile); }
+  .kindrow button[data-k="goal"].on{ background:var(--goal); border-color:var(--goal); color:#231a00; }
+  #delNode{ width:100%; background:transparent; border:1px solid var(--danger); color:var(--danger);
+    padding:8px; border-radius:8px; cursor:pointer; font-size:12px; margin-top:4px; font-family:var(--font); }
+  #delNode:hover{ background:var(--danger); color:#fff; }
+
+  /* ---- hint / legend ---- */
+  #hint{ position:absolute; left:12px; bottom:12px; background:rgba(22,29,46,.9); border:1px solid var(--line);
+    border-radius:10px; padding:8px 12px; font-size:12px; color:var(--muted); z-index:12; max-width:60%; }
+  #hint b{ color:var(--text); }
+  #legend{ position:absolute; right:12px; bottom:12px; display:flex; gap:12px; background:rgba(22,29,46,.9);
+    border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:11px; color:var(--muted); z-index:12; }
+  #legend .lg{ display:flex; align-items:center; gap:5px; }
+  #legend .dot{ width:11px; height:11px; border-radius:50%; }
+  #toast{ position:absolute; left:50%; top:14px; transform:translateX(-50%); background:var(--accent); color:#fff;
+    padding:8px 16px; border-radius:20px; font-size:13px; z-index:30; opacity:0; transition:opacity .25s; pointer-events:none; }
+
+  /* ---- title block (右下・盤面上) ---- */
+  .tb-card{ box-sizing:border-box; width:100%; height:100%; padding:12px 14px;
+    background:rgba(11,15,24,.92); border:2px solid #43507a; border-radius:12px;
+    display:flex; flex-direction:column; gap:8px; font-family:var(--font); }
+  .tb-input{ background:transparent; border:none; border-bottom:1px solid #2b3654; color:var(--text);
+    font-family:var(--font); padding:3px 2px; width:100%; }
+  .tb-input:focus{ outline:none; border-bottom-color:var(--accent); }
+  .tb-input::placeholder{ color:#5f6c92; }
+  .tb-title{ font-size:20px; font-weight:700; }
+  .tb-row{ display:flex; align-items:center; gap:8px; }
+  .tb-ico{ font-size:16px; }
+  .tb-name, .tb-date{ font-size:15px; }
+  .tb-date{ color-scheme:dark; }
+  #toast.show{ opacity:1; }
+
+  /* ---- cloud（共有保存）/ Jira ---- */
+  .cloud-only{ display:none !important; }
+  body.cloud .cloud-only{ display:inline-flex !important; }
+  body.cloud #title{ min-width:120px; max-width:300px; }
+  #mapName{ font-size:11px; color:var(--muted); max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #saveState{ font-size:11px; padding:3px 8px; border-radius:10px; border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  #saveState.dirty{ color:#f2b21a; border-color:#6b5414; }
+  #saveState.saved{ color:#86e5ad; border-color:#1f5a3a; }
+  #userChip{ align-items:center; gap:6px; font-size:12px; color:var(--muted); padding:4px 8px; border:1px solid var(--line); border-radius:16px; }
+  #userChip img{ width:20px; height:20px; border-radius:50%; }
+  #userChip a{ color:var(--muted); text-decoration:none; margin-left:4px; }
+  #userChip a:hover{ color:var(--text); }
+  .jira-meta{ font-size:11px; color:var(--muted); margin-top:5px; line-height:1.5; }
+  .jira-meta a{ color:#8fb0ff; }
+  .jira-meta .st{ display:inline-block; padding:1px 7px; border-radius:8px; font-weight:600; }
+
+  #modalBg{ position:fixed; inset:0; background:rgba(5,8,14,.6); z-index:50; display:none; align-items:flex-start; justify-content:center; padding-top:8vh; }
+  #modalBg.show{ display:flex; }
+  #modal{ width:min(720px, calc(100vw - 32px)); max-height:78vh; display:flex; flex-direction:column; background:var(--panel);
+    border:1px solid var(--line); border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.5); }
+  #modal header{ display:flex; align-items:center; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); }
+  #modal header h2{ font-size:15px; margin:0; flex:1; }
+  #mapFilter{ background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:7px 10px; font-size:13px; font-family:var(--font); width:200px; }
+  #mapList{ overflow:auto; padding:6px 8px 10px; }
+  .maprow{ display:grid; grid-template-columns:1fr auto; gap:2px 12px; padding:10px 10px; border-radius:10px; cursor:pointer; }
+  .maprow:hover, .maprow:focus{ background:var(--panel2); outline:none; }
+  .maprow .t{ font-size:14px; font-weight:600; }
+  .maprow .n{ font-size:11px; color:var(--muted); }
+  .maprow .m{ font-size:11px; color:var(--muted); text-align:right; grid-row:span 2; align-self:center; }
+  .maprow.cur .t::after{ content:"  ・表示中"; color:var(--accent); font-weight:400; font-size:11px; }
+  #mapEmpty{ padding:22px; text-align:center; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="toolbar">
+    <input id="title" value="戦略マップ" spellcheck="false">
+    <span id="mapName" class="cloud-only" title="マップ名（ノードのリンク先に書く名前）"></span>
+    <span id="saveState" class="cloud-only"></span>
+    <div class="sep"></div>
+    <button class="tb" id="btnAdd">＋ ノード</button>
+    <button class="tb" id="btnConnect">→ 接続</button>
+    <button class="tb" id="btnLayout">▤ 自動整列</button>
+    <button class="tb ghost" id="btnFit">⤢ 全体表示</button>
+    <select id="sizeSel" title="アートボードの縦横比">
+      <option value="16:10">◱ 16:10</option>
+      <option value="16:9">◱ 16:9</option>
+      <option value="a3land">▭ A3 横</option>
+      <option value="a3port">▯ A3 縦</option>
+      <option value="fit">⛶ 画面に合わせる</option>
+    </select>
+    <div class="sep"></div>
+    <button class="tb ghost" id="btnBack" style="display:none">← 戻る</button>
+    <button class="tb ghost" id="btnOpen">📂 開く</button>
+    <button class="tb ghost" id="btnReload">↻ 再読込</button>
+    <button class="tb ghost" id="btnSave">💾 保存</button>
+    <button class="tb ghost" id="btnExport">⇩ 書出し</button>
+    <button class="tb ghost cloud-only" id="btnJira" title="ノードに書いたJiraキーの状態を取り直す">⟳ Jira</button>
+    <div class="grow"></div>
+    <button class="tb ghost" id="btnZoomOut">－</button>
+    <span id="zoomlabel">100%</span>
+    <button class="tb ghost" id="btnZoomIn">＋</button>
+    <span id="userChip" class="cloud-only"></span>
+  </div>
+
+  <div id="stage">
+    <svg id="canvas">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#93a0be"></path>
+        </marker>
+        <marker id="arrowSel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#4c7dff"></path>
+        </marker>
+      </defs>
+      <g id="viewport">
+        <g id="content"></g>
+        <foreignObject id="titleblock" x="0" y="0" width="360" height="150">
+          <div xmlns="http://www.w3.org/1999/xhtml" class="tb-card">
+            <input id="tbTitle" class="tb-input tb-title" placeholder="タイトル" spellcheck="false">
+            <div class="tb-row"><span class="tb-ico">👤</span><input id="tbName" class="tb-input tb-name" placeholder="名前" spellcheck="false"></div>
+            <div class="tb-row"><span class="tb-ico">📅</span><input id="tbDate" class="tb-input tb-date" type="date"></div>
+          </div>
+        </foreignObject>
+      </g>
+    </svg>
+
+    <div id="inspector">
+      <h3>ノード編集</h3>
+      <div class="field"><label>タイトル</label><textarea id="fLabel" rows="2"></textarea></div>
+      <div class="field"><label>担当者 👤</label><input id="fAssignee" spellcheck="false"></div>
+      <div class="field"><label>期限 📅</label><input id="fDue" type="date"></div>
+      <div class="field"><label>完了日 ✅（入れると完了扱い）</label><input id="fDone" type="date"></div>
+      <div class="field"><label>種別</label>
+        <div class="kindrow" id="fKind">
+          <button data-k="start">スタート</button>
+          <button data-k="task">タスク</button>
+          <button data-k="milestone">節目</button>
+          <button data-k="goal">ゴール</button>
+        </div>
+      </div>
+      <div class="field"><label>メモ</label><textarea id="fNote" rows="3"></textarea></div>
+      <div class="field"><label>🎫 Jira キー（入れると状態・担当・期限・進捗をJiraから表示）</label><input id="fJira" spellcheck="false" placeholder="例: MEDS-21" autocomplete="off"><div id="fJiraMeta" class="jira-meta"></div></div>
+      <div class="field"><label>🔗 リンク先マップ（マップ名／ダブルクリックで開く）</label><input id="fLink" spellcheck="false" placeholder="例: sub-map.json"></div>
+      <button id="delNode">🗑 このノードを削除</button>
+    </div>
+
+    <div id="hint"></div>
+    <div id="legend">
+      <div class="lg"><span class="dot" style="background:var(--start)"></span>スタート</div>
+      <div class="lg"><span class="dot" style="background:var(--task)"></span>タスク</div>
+      <div class="lg"><span class="dot" style="background:var(--mile)"></span>節目</div>
+      <div class="lg"><span class="dot" style="background:var(--goal)"></span>ゴール</div>
+    </div>
+    <div id="toast"></div>
+  </div>
+</div>
+
+<div id="modalBg">
+  <div id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <header>
+      <h2 id="modalTitle">マップを開く</h2>
+      <input id="mapFilter" placeholder="絞り込み" spellcheck="false" autocomplete="off">
+      <button class="tb" id="btnNewMap">＋ 新規</button>
+      <button class="tb ghost" id="btnImport" title="手元のJSONファイルを読み込んで、新しいマップとして保存できる状態にする">⇧ JSONを取込</button>
+      <button class="tb ghost" id="btnCloseModal">✕</button>
+    </header>
+    <div id="mapList"></div>
+  </div>
+</div>
+
+<input type="file" id="filepick" accept=".json,application/json" style="display:none">
+<input type="file" id="dirpick" webkitdirectory style="display:none">
+
+<script>
+"use strict";
+
+/* ========================================================================
+   戦略マップ — 単一HTMLツール（ローカル版／共有版の両対応）
+   データモデル: { title, titleBlock, nodes:[{id,label,assignee,due,done,kind,note,link,jira,x,y}], edges:[{from,to,label}] }
+   kind: "start" | "task" | "milestone" | "goal"
+   ======================================================================== */
+
+const SAMPLE = {
+  title: "戦略マップ",
+  nodes: [
+    { id:"start", label:"ここから始める", assignee:"", due:"", kind:"start", x:250, y:920 },
+    { id:"goal",  label:"ゴール",         assignee:"", due:"", kind:"goal",  x:1330, y:230 }
+  ],
+  edges: [ { from:"start", to:"goal" } ]
+};
+
+const R = { start:44, task:46, milestone:44, goal:60 };
+const COLORS = {
+  start:{ stroke:"#2e9e5b", fill:"#12241a" },
+  task:{ stroke:"#4c7dff", fill:"#141d33" },
+  milestone:{ stroke:"#a06bff", fill:"#1e1830" },
+  goal:{ stroke:"#f2b21a", fill:"#2a2210" }
+};
+
+// アートボード（固定枠）。縦横比はプリセットで切替。既定は 16:10 ワイド。
+// 面積は A3 相当（＝"頭に入る"情報量の目安）に揃えてある。
+const A3_AREA = 1587*1122;
+const PRESETS = {
+  "16:10":  { label:"16:10 ワイド", w:1600, h:1000 },
+  "16:9":   { label:"16:9 ワイド",  w:1600, h:900  },
+  "a3land": { label:"A3 横",        w:1587, h:1122 },
+  "a3port": { label:"A3 縦",        w:1122, h:1587 },
+  "fit":    { label:"画面に合わせる", w:1600, h:1000 }  // 実寸は画面比率から算出
+};
+let pageKey = "16:10";
+let PAGE = { w:PRESETS[pageKey].w, h:PRESETS[pageKey].h };
+const PAD = { l:120, r:160, t:130, b:100 };   // アートボード内側の作業余白
+
+let data = { title:"戦略マップ", nodes:[], edges:[], titleBlock:{ title:"", name:"", date:"" } };
+let view = { scale:1, tx:0, ty:0 };
+let selNodes = new Set();                      // 選択中ノードID（複数可）
+let selEdge  = null;                           // 選択中の矢印ID
+let marquee  = null;                           // 範囲選択の矩形 {x0,y0,x1,y1}(盤面座標)
+let mode = "select";                          // 'select' | 'connect'
+let connectFrom = null;
+let fileHandle = null;
+let drag = null;
+let lastTap = { id:null, t:0 };   // 自前のダブルクリック検出用（再描画でDOMが変わってもIDと時刻で判定）
+
+const svg      = document.getElementById("canvas");
+const viewport = document.getElementById("viewport");
+const content  = document.getElementById("content");
+const inspector= document.getElementById("inspector");
+const hintEl   = document.getElementById("hint");
+
+/* ---- text measuring ---- */
+const _mc = document.createElement("canvas").getContext("2d");
+function measure(txt, font){ _mc.font = font; return _mc.measureText(txt).width; }
+const FONT_LABEL = '600 13px ' + getComputedStyle(document.body).fontFamily;
+const FONT_BADGE = '600 11px ' + getComputedStyle(document.body).fontFamily;
+
+/* ========================= helpers ========================= */
+function uid(){
+  let n=1; while(data.nodes.some(x=>x.id==="n"+n)) n++; return "n"+n;
+}
+function nodeById(id){ return data.nodes.find(n=>n.id===id); }
+function edgeId(e){ return e.from + "→" + e.to; }
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function clampToPage(n){
+  const r = R[n.kind]||46;
+  n.x = clamp(n.x, r+12, PAGE.w - r - 110);  // 右側はバッジ分の余白
+  n.y = clamp(n.y, r+72, PAGE.h - r - 12);   // 上側はバッジ分の余白
+}
+function esc(s){ return String(s??"").replace(/[&<>"]/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmtDue(d){
+  if(!d) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? (+m[2])+"/"+(+m[3]) : d;
+}
+function todayStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function isOverdue(d){ return !!d && /^\d{4}-\d{2}-\d{2}/.test(d) && d.slice(0,10) < todayStr(); }
+
+/* ---- Jira 連携（クラウド版のみ）----
+   ノードの jira にキーを書くと、Jiraの状態を表示に使う。
+   ・完了日: ノードの done が空で、Jiraが「完了」カテゴリなら解決日を完了日として扱う
+   ・担当/期限: ノードに書いていなければ Jira の値を使う（ノードに書いた値が優先） */
+let jira = {};              // key → { summary,status,category,assignee,duedate,resolutiondate,url,children:{total,done} }
+let jiraMissing = new Set();
+let jiraState = "idle";     // idle | loading | ok | off | error
+function effective(n){
+  const ji = n.jira ? jira[n.jira] : null;
+  const manualDone = !!(n.done && String(n.done).trim());
+  const jiraDone = !!(ji && ji.category==="done");
+  return {
+    ji,
+    done: manualDone || jiraDone,
+    doneDate: manualDone ? n.done : (jiraDone && ji.resolutiondate ? ji.resolutiondate.slice(0,10) : ""),
+    assignee: n.assignee || (ji && ji.assignee) || "",
+    due: n.due || (ji && ji.duedate) || ""
+  };
+}
+const JIRA_COLORS = {
+  done:          { bg:"#10301f", border:"#2fbf71", fg:"#86e5ad" },
+  indeterminate: { bg:"#142147", border:"#4c7dff", fg:"#b9cbff" },
+  new:           { bg:"#1b2236", border:"#43507a", fg:"#cdd6ea" },
+  missing:       { bg:"#341219", border:"#ff5d6c", fg:"#ffb3bb" },
+  pending:       { bg:"#161d2e", border:"#2b3654", fg:"#93a0be" }
+};
+function jiraChip(key, ji){
+  if(ji){
+    const c = JIRA_COLORS[ji.category] || JIRA_COLORS.new;
+    const prog = ji.children && ji.children.total ? `  ${ji.children.done}/${ji.children.total}` : "";
+    return { text:`${key}  ${ji.status}${prog}`, ...c };
+  }
+  if(jiraMissing.has(key)) return { text:`${key}  見つかりません`, ...JIRA_COLORS.missing };
+  return { text:key, ...JIRA_COLORS.pending };
+}
+function toWorld(e){
+  const r = svg.getBoundingClientRect();
+  return { x:(e.clientX - r.left - view.tx)/view.scale, y:(e.clientY - r.top - view.ty)/view.scale };
+}
+function wrapLabel(txt, maxW){
+  const chars = [...String(txt||"")];
+  const lines=[]; let cur="";
+  for(const ch of chars){
+    if(ch==="\n"){ lines.push(cur); cur=""; continue; }
+    const t = cur+ch;
+    if(measure(t, FONT_LABEL) > maxW && cur){ lines.push(cur); cur=ch; }
+    else cur=t;
+  }
+  if(cur) lines.push(cur);
+  if(lines.length>3){ lines.length=3; lines[2] = lines[2].slice(0,-1)+"…"; }
+  return lines.length?lines:[""];
+}
+
+/* ========================= rendering ========================= */
+function render(){
+  let s = "";
+
+  // A3 artboard (固定枠)
+  s += `<rect x="-6" y="-6" width="${PAGE.w+12}" height="${PAGE.h+12}" rx="10" fill="#000" opacity="0.35"></rect>`;
+  s += `<rect x="0" y="0" width="${PAGE.w}" height="${PAGE.h}" rx="6" fill="#0b0f18"></rect>`;
+  s += `<rect x="0" y="0" width="${PAGE.w}" height="${PAGE.h}" rx="6" fill="none" stroke="#43507a" stroke-width="2.5"></rect>`;
+  s += `<text x="6" y="-14" fill="#5f6c92" font-size="18" font-weight="700">${esc(PRESETS[pageKey].label)}</text>`;
+  s += `<text x="${PAGE.w}" y="-14" text-anchor="end" fill="#3f4a6b" font-size="14">${PAGE.w}×${PAGE.h}px — 頭に入る最大サイズの作業枠</text>`;
+
+  // 主対角（左下→右上）の法線と最大距離。曲線は対角線から「外へ」膨らませる基準に使う。
+  const _diagN = Math.hypot(PAGE.w, PAGE.h) || 1;
+  const diagNx = PAGE.h/_diagN, diagNy = PAGE.w/_diagN;      // 対角線の単位法線（右下向きが正）
+  const diagMax = (PAGE.w*PAGE.h)/_diagN;                    // 対角線から隅までの最大距離
+
+  // edges
+  for(const e of data.edges){
+    const a = nodeById(e.from), b = nodeById(e.to);
+    if(!a||!b) continue;
+    const isSel = selEdge===edgeId(e);
+    const ra=R[a.kind]||46, rb=R[b.kind]||46;
+    const dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy)||1;
+    const ux=dx/len, uy=dy/len;
+    const sx=a.x+ux*ra, sy=a.y+uy*ra;
+    const tx=b.x-ux*(rb+7), ty=b.y-uy*(rb+7);
+    const mx=(sx+tx)/2, my=(sy+ty)/2;
+    // 対角線からの符号付き距離（+:右下側 / -:左上側）。これで膨らむ向きと量を決める。
+    const sd = mx*diagNx + (my-PAGE.h)*diagNy;
+    const side = sd<0 ? -1 : 1;                 // 外向き（対角線から離れる向き）
+    let perpx=-uy, perpy=ux;                     // 経路に対して垂直な向き
+    if(perpx*(side*diagNx) + perpy*(side*diagNy) < 0){ perpx=-perpx; perpy=-perpy; }  // 外向きに揃える
+    // 右下側＝下膨らみ / 左上側＝上膨らみ。対角線に近いほど直線、遠いほどよく膨らむ。
+    const distF = clamp(Math.abs(sd)/diagMax, 0, 1);
+    const bow = clamp(len*0.13, 0, 42) * (0.15 + 0.85*distF);
+    const cmx = mx + perpx*bow;
+    const cmy = my + perpy*bow;
+    const d=`M${sx},${sy} Q${cmx},${cmy} ${tx},${ty}`;
+    s += `<path class="edge-hit" data-edge="${esc(edgeId(e))}" d="${d}"></path>`;
+    s += `<path class="edge${isSel?' sel':''}" d="${d}" marker-end="url(#${isSel?'arrowSel':'arrow'})"></path>`;
+    if(e.label){
+      const lw=measure(e.label,FONT_BADGE);
+      s += `<rect x="${cmx-lw/2-5}" y="${cmy-9}" width="${lw+10}" height="17" rx="5" fill="#0f1420" stroke="#2b3654"></rect>`;
+      s += `<text class="badge-text" x="${cmx}" y="${cmy+3}" text-anchor="middle" fill="#93a0be">${esc(e.label)}</text>`;
+    }
+  }
+
+  // nodes
+  let chips = "";   // Jira チップは他のノードに隠れないよう最後にまとめて描く
+  for(const n of data.nodes){
+    const r = R[n.kind]||46;
+    const col = COLORS[n.kind]||COLORS.task;
+    const selNode = selNodes.has(n.id);
+    const hasLink = !!(n.link && String(n.link).trim());
+    s += `<g data-node="${esc(n.id)}"${hasLink?' data-link="1"':''} style="cursor:${hasLink?'pointer':'grab'}">`;
+    if(n.kind==="goal")
+      s += `<circle cx="${n.x}" cy="${n.y}" r="${r+7}" fill="none" stroke="${col.stroke}" stroke-width="1.5" opacity=".45"></circle>`;
+    if(hasLink)
+      s += `<circle cx="${n.x}" cy="${n.y}" r="${r+8}" fill="none" stroke="#4c7dff" stroke-width="1.5" stroke-dasharray="5 4" opacity=".65"></circle>`;
+    s += `<circle cx="${n.x}" cy="${n.y}" r="${r}" fill="${col.fill}" stroke="${col.stroke}" stroke-width="${selNode?4:2.5}"></circle>`;
+    const ev = effective(n);
+    const done = ev.done;
+    // Jira の子課題（エピック配下など）の進捗リング
+    if(ev.ji && ev.ji.children && ev.ji.children.total){
+      const rr=r+12, frac=ev.ji.children.done/ev.ji.children.total;
+      s += `<circle cx="${n.x}" cy="${n.y}" r="${rr}" fill="none" stroke="#2b3654" stroke-width="4"></circle>`;
+      if(frac>=1) s += `<circle cx="${n.x}" cy="${n.y}" r="${rr}" fill="none" stroke="#2fbf71" stroke-width="4"></circle>`;
+      else if(frac>0){
+        const a=frac*2*Math.PI - Math.PI/2, ex=n.x+rr*Math.cos(a), ey=n.y+rr*Math.sin(a);
+        s += `<path d="M${n.x},${n.y-rr} A${rr},${rr} 0 ${frac>0.5?1:0} 1 ${ex},${ey}" fill="none" stroke="#2fbf71" stroke-width="4" stroke-linecap="round"></path>`;
+      }
+    }
+    if(done){
+      // 完了：緑のリング＋右下にチェックマーク
+      s += `<circle cx="${n.x}" cy="${n.y}" r="${r+5}" fill="none" stroke="#2fbf71" stroke-width="2.5" opacity=".7"></circle>`;
+      const kx=n.x + r*0.70, ky=n.y + r*0.70;
+      s += `<circle cx="${kx}" cy="${ky}" r="11" fill="#2fbf71" stroke="#0b0f18" stroke-width="2"></circle>`;
+      s += `<path d="M${kx-4.6},${ky+0.2} L${kx-1.3},${ky+3.7} L${kx+4.7},${ky-3.9}" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path>`;
+    }
+    if(connectFrom===n.id)
+      s += `<circle cx="${n.x}" cy="${n.y}" r="${r+4}" fill="none" stroke="#4c7dff" stroke-width="2" stroke-dasharray="4 3"></circle>`;
+
+    // label (wrapped)
+    const lines = wrapLabel(n.label, r*2-14);
+    const lh=16, startY = n.y - (lines.length-1)*lh/2 + 4;
+    for(let i=0;i<lines.length;i++)
+      s += `<text class="node-label" x="${n.x}" y="${startY+i*lh}" text-anchor="middle">${esc(lines[i])}</text>`;
+
+    // badge (upper-right): 👤 assignee / 📅 due / ✅ done(完了日・緑)
+    const bl=[];
+    if(ev.assignee) bl.push({t:"👤 "+ev.assignee, c:"#cdd6ea"});
+    if(done)        bl.push({t:"✅ "+(ev.doneDate?fmtDue(ev.doneDate):"完了"), c:"#86e5ad"});
+    else if(ev.due) bl.push({t:"📅 "+fmtDue(ev.due), c: isOverdue(ev.due)?"#ff8a95":"#cdd6ea"});
+    if(bl.length){
+      const pad=6, lh2=15;
+      const w = Math.max(...bl.map(o=>measure(o.t,FONT_BADGE))) + pad*2;
+      const h = bl.length*lh2 + pad*1.2;
+      const bx = n.x + r*0.30;
+      const by = n.y - r*0.45 - h;
+      s += `<rect x="${bx}" y="${by}" width="${w}" height="${h}" rx="8" fill="#0f1420" stroke="${done?'#2fbf71':col.stroke}" stroke-width="1.4"></rect>`;
+      for(let i=0;i<bl.length;i++)
+        s += `<text class="badge-text" x="${bx+pad}" y="${by+pad+11+i*lh2}" fill="${bl[i].c}">${esc(bl[i].t)}</text>`;
+    }
+    if(hasLink){
+      const lx=n.x - r*0.72, ly=n.y + r*0.72;   // 左下に🔗チップ（右下は完了✓）
+      s += `<circle cx="${lx}" cy="${ly}" r="12" fill="#4c7dff" stroke="#0b0f18" stroke-width="2"></circle>`;
+      s += `<text x="${lx}" y="${ly+4}" text-anchor="middle" font-size="12" pointer-events="none">🔗</text>`;
+    }
+    // Jira チップ（丸の下）：キー・状態・子課題の進捗
+    if(n.jira){
+      const st = jiraChip(n.jira, ev.ji);
+      const tw = measure(st.text, FONT_BADGE) + 14;
+      const cy = n.y + r + (ev.ji && ev.ji.children && ev.ji.children.total ? 26 : 16);
+      chips += `<g data-node="${esc(n.id)}" style="cursor:grab"><rect x="${n.x-tw/2}" y="${cy-9}" width="${tw}" height="18" rx="9" fill="${st.bg}" stroke="${st.border}" stroke-width="1.2"></rect>`;
+      chips += `<text class="badge-text" x="${n.x}" y="${cy+4}" text-anchor="middle" fill="${st.fg}">${esc(st.text)}</text></g>`;
+    }
+    s += `</g>`;
+  }
+  s += chips;
+
+  // marquee (範囲選択の矩形)
+  if(marquee){
+    const x=Math.min(marquee.x0,marquee.x1), y=Math.min(marquee.y0,marquee.y1);
+    const w=Math.abs(marquee.x1-marquee.x0), h=Math.abs(marquee.y1-marquee.y0);
+    s += `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="rgba(76,125,255,.12)" stroke="#4c7dff" stroke-width="1.5" stroke-dasharray="6 4" pointer-events="none"></rect>`;
+  }
+
+  content.innerHTML = s;
+  applyTransform();
+  autosave();
+}
+function applyTransform(){
+  viewport.setAttribute("transform", `translate(${view.tx},${view.ty}) scale(${view.scale})`);
+  document.getElementById("zoomlabel").textContent = Math.round(view.scale*100)+"%";
+}
+
+/* ========================= inspector ========================= */
+function showInspector(n){
+  inspector.classList.add("show");
+  document.getElementById("fLabel").value    = n.label||"";
+  document.getElementById("fAssignee").value = n.assignee||"";
+  document.getElementById("fDue").value      = n.due||"";
+  document.getElementById("fDone").value     = n.done||"";
+  document.getElementById("fNote").value     = n.note||"";
+  document.getElementById("fLink").value     = n.link||"";
+  if(document.activeElement!==document.getElementById("fJira")) document.getElementById("fJira").value = n.jira||"";
+  updateJiraMeta(n);
+  document.querySelectorAll("#fKind button").forEach(b=>b.classList.toggle("on", b.dataset.k===(n.kind||"task")));
+}
+function updateJiraMeta(n){
+  const el=document.getElementById("fJiraMeta");
+  if(!n.jira){ el.innerHTML=""; return; }
+  if(!CLOUD){ el.textContent="Jiraの表示は共有版（ログインして使う版）でのみ動きます"; return; }
+  const ji=jira[n.jira];
+  if(ji){
+    const c=JIRA_COLORS[ji.category]||JIRA_COLORS.new;
+    const prog=ji.children&&ji.children.total?` ／ 子課題 ${ji.children.done}/${ji.children.total} 完了`:"";
+    el.innerHTML=`<span class="st" style="background:${c.bg};color:${c.fg};border:1px solid ${c.border}">${esc(ji.status)}</span> `
+      +`${esc(ji.summary)}${esc(prog)}<br>`
+      +`担当: ${esc(ji.assignee||"未割当")} ／ 期限: ${esc(ji.duedate||"なし")} `
+      +`<a href="${esc(ji.url)}" target="_blank" rel="noopener">Jiraで開く ↗</a>`;
+  } else if(jiraMissing.has(n.jira)) el.textContent="この課題はJiraに見つかりません（キーの打ち間違い、または権限なし）";
+  else if(jiraState==="off") el.textContent="Jira連携がサーバーで未設定です";
+  else if(jiraState==="error") el.textContent="Jiraの取得に失敗しました（⟳ Jira で再試行）";
+  else el.textContent="Jiraから取得中…";
+}
+function hideInspector(){ inspector.classList.remove("show"); }
+
+function refreshInspector(){
+  if(selNodes.size===1){ const n=nodeById([...selNodes][0]); if(n){ showInspector(n); return; } }
+  hideInspector();
+}
+function selectedNode(){ return selNodes.size===1 ? nodeById([...selNodes][0]) : null; }
+function selectNode(id){ selNodes=new Set([id]); selEdge=null; connectFrom=null; refreshInspector(); render(); }
+function selectEdge(id){ selNodes.clear(); selEdge=id; hideInspector(); render(); }
+function deselect(){ if(!selNodes.size && selEdge===null) return; selNodes.clear(); selEdge=null; hideInspector(); render(); }
+
+["fLabel","fAssignee","fDue","fDone","fNote","fLink"].forEach(fid=>{
+  document.getElementById(fid).addEventListener("input", ()=>{
+    const n=selectedNode(); if(!n) return;
+    n.label    = document.getElementById("fLabel").value;
+    n.assignee = document.getElementById("fAssignee").value;
+    n.due      = document.getElementById("fDue").value;
+    n.done     = document.getElementById("fDone").value;
+    n.note     = document.getElementById("fNote").value;
+    n.link     = document.getElementById("fLink").value.trim();
+    render();
+  });
+});
+document.getElementById("fJira").addEventListener("input", e=>{
+  const n=selectedNode(); if(!n) return;
+  const v=e.target.value.trim().toUpperCase();
+  n.jira = /^[A-Z][A-Z0-9_]+-\d+$/.test(v) ? v : "";
+  updateJiraMeta(n); render();
+  if(n.jira && !jira[n.jira]) scheduleJira();
+});
+document.querySelectorAll("#fKind button").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    const n=selectedNode(); if(!n) return;
+    n.kind=b.dataset.k; showInspector(n); render();
+  });
+});
+document.getElementById("delNode").addEventListener("click", deleteSelection);
+
+// 選択中のノード（複数可）と矢印をまとめて削除
+function deleteSelection(){
+  if(!selNodes.size && selEdge===null) return;
+  if(selNodes.size){
+    data.nodes = data.nodes.filter(n=>!selNodes.has(n.id));
+    data.edges = data.edges.filter(e=>!selNodes.has(e.from) && !selNodes.has(e.to));
+  }
+  if(selEdge!==null) data.edges = data.edges.filter(e=>edgeId(e)!==selEdge);
+  selNodes.clear(); selEdge=null; hideInspector(); render();
+}
+
+/* ========================= interaction ========================= */
+svg.addEventListener("contextmenu", e=> e.preventDefault());   // 右クリックはパンに使う
+svg.addEventListener("pointerdown", e=>{
+  // 右ドラッグ = 視点移動（パン）。対象を問わず最優先。
+  if(e.button===2){
+    drag={ kind:"pan", moved:false, sx:e.clientX, sy:e.clientY, otx:view.tx, oty:view.ty };
+    svg.classList.add("panning"); svg.setPointerCapture(e.pointerId);
+    return;
+  }
+  if(e.button!==0) return;                        // 左ボタン以外は無視
+  if(e.target.closest("#titleblock")){ drag=null; return; }  // タイトルブロックはそのまま編集
+
+  const g = e.target.closest("[data-node]");
+  const eg= e.target.closest("[data-edge]");
+  if(g){
+    const id=g.getAttribute("data-node");
+    if(mode==="connect"){ handleConnect(id); return; }
+    if(!selNodes.has(id)){ selNodes=new Set([id]); selEdge=null; refreshInspector(); render(); }
+    const snap=new Map();
+    selNodes.forEach(nid=>{ const nn=nodeById(nid); if(nn) snap.set(nid,{x:nn.x,y:nn.y}); });
+    drag={ kind:"node", id, moved:false, sx:e.clientX, sy:e.clientY, snap };
+    svg.setPointerCapture(e.pointerId);
+  } else if(eg){
+    selectEdge(eg.getAttribute("data-edge"));
+  } else if(mode==="connect"){
+    /* 接続モード中の空クリックは無視 */
+  } else {
+    // 背景を左ドラッグ = 範囲選択（capture はしない → dblクリック判定を壊さない）
+    const p=toWorld(e);
+    drag={ kind:"marquee", moved:false, sx:e.clientX, sy:e.clientY, base:e.shiftKey?new Set(selNodes):new Set() };
+    marquee={ x0:p.x, y0:p.y, x1:p.x, y1:p.y };
+  }
+});
+svg.addEventListener("pointermove", e=>{
+  if(!drag) return;
+  const ddx=e.clientX-drag.sx, ddy=e.clientY-drag.sy;
+  if(Math.hypot(ddx,ddy)>3) drag.moved=true;
+  if(drag.kind==="node"){
+    drag.snap.forEach((p,nid)=>{ const nn=nodeById(nid); if(!nn) return;
+      nn.x=p.x+ddx/view.scale; nn.y=p.y+ddy/view.scale; clampToPage(nn); });
+    render();
+  } else if(drag.kind==="pan"){
+    view.tx=drag.otx+ddx; view.ty=drag.oty+ddy; applyTransform();
+  } else if(drag.kind==="marquee"){
+    const p=toWorld(e); marquee.x1=p.x; marquee.y1=p.y;
+    const x0=Math.min(marquee.x0,marquee.x1), x1=Math.max(marquee.x0,marquee.x1);
+    const y0=Math.min(marquee.y0,marquee.y1), y1=Math.max(marquee.y0,marquee.y1);
+    const inside=data.nodes.filter(n=> n.x>=x0 && n.x<=x1 && n.y>=y0 && n.y<=y1).map(n=>n.id);
+    selNodes=new Set([...drag.base, ...inside]); selEdge=null;
+    render();
+  }
+});
+svg.addEventListener("pointerup", e=>{
+  svg.classList.remove("panning");
+  if(!drag) return;
+  // ネイティブ dblclick は「1クリック目の選択→render() でDOM差し替え」により成立しないので、自前で検出する
+  const now=Date.now();
+  if(drag.kind==="node"){
+    if(!drag.moved){
+      const id=drag.id, nn=nodeById(id);
+      const dbl=(lastTap.id===id && (now-lastTap.t)<420);
+      if(dbl){
+        lastTap={id:null,t:0}; drag=null;
+        if(nn && nn.link && String(nn.link).trim()){ followLink(nn.link.trim()); return; }  // リンク付き→下位マップへドリルダウン
+        selectNode(id); document.getElementById("fLabel").focus(); return;                  // それ以外→タイトル編集
+      }
+      lastTap={id, t:now}; selectNode(id);
+    } else autosave();
+  } else if(drag.kind==="marquee"){
+    marquee=null;
+    if(!drag.moved){
+      const dbl=(lastTap.id==="__bg__" && (now-lastTap.t)<420);
+      if(dbl){ lastTap={id:null,t:0}; const p=toWorld(e); drag=null; addNodeAt(p.x,p.y); return; }  // 空きスペース→ノード追加
+      lastTap={id:"__bg__", t:now}; deselect();
+    } else { refreshInspector(); render(); }
+  }
+  drag=null;
+});
+svg.addEventListener("wheel", e=>{
+  e.preventDefault();
+  zoomBy(e.deltaY<0 ? 1.1 : 1/1.1);   // 画面中心基準でズーム（パン位置は保持）
+}, { passive:false });
+
+function handleConnect(id){
+  if(connectFrom===null){ connectFrom=id; render(); updateHint(); return; }
+  if(connectFrom===id){ connectFrom=null; render(); updateHint(); return; }
+  if(!data.edges.some(x=>x.from===connectFrom && x.to===id))
+    data.edges.push({ from:connectFrom, to:id });
+  connectFrom=id;   // chain connections
+  render(); updateHint();
+}
+
+function addNodeAt(x,y){
+  const n={ id:uid(), label:"新しいノード", assignee:"", due:"", kind:"task", x, y };
+  clampToPage(n);
+  data.nodes.push(n);
+  selectNode(n.id);
+  document.getElementById("fLabel").focus();
+  document.getElementById("fLabel").select();
+}
+
+/* keyboard */
+window.addEventListener("keydown", e=>{
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if(e.key==="Escape"){ if(mode==="connect") setMode("select"); else deselect(); return; }
+  if((e.key==="Delete"||e.key==="Backspace") && !typing){
+    deleteSelection();
+  }
+});
+
+/* ========================= toolbar ========================= */
+function setMode(m){
+  mode=m; connectFrom=null;
+  document.getElementById("btnConnect").classList.toggle("active", m==="connect");
+  svg.classList.toggle("connect", m==="connect");
+  updateHint(); render();
+}
+function updateHint(){
+  if(mode==="connect"){
+    hintEl.innerHTML = connectFrom
+      ? `接続元を選択中。<b>接続先の丸をクリック</b>すると矢印が引かれます（連続でつなげられます）。<b>Esc</b>で終了。`
+      : `<b>接続モード</b>：矢印の<b>始点→終点</b>の順に丸をクリック。<b>Esc</b>で終了。`;
+  } else {
+    hintEl.innerHTML = `<b>ダブルクリック</b>で追加 ／ ドラッグで移動 ／ <b>左ドラッグで範囲選択</b>→<b>Delete</b>でまとめて削除 ／ <b>右ドラッグで視点移動</b>`;
+  }
+}
+
+document.getElementById("btnAdd").addEventListener("click", ()=>{
+  const r=svg.getBoundingClientRect();
+  const p={ x:(r.width/2 - view.tx)/view.scale, y:(r.height/2 - view.ty)/view.scale };
+  addNodeAt(p.x, p.y);
+});
+document.getElementById("btnConnect").addEventListener("click", ()=> setMode(mode==="connect"?"select":"connect"));
+document.getElementById("btnLayout").addEventListener("click", ()=>{ autoLayout(); toast("自動整列しました"); });
+document.getElementById("btnFit").addEventListener("click", fitView);
+document.getElementById("btnZoomIn").addEventListener("click", ()=> zoomBy(1.15));
+document.getElementById("btnZoomOut").addEventListener("click", ()=> zoomBy(1/1.15));
+document.getElementById("title").addEventListener("input", e=>{ data.title=e.target.value; autosave(); });
+
+function zoomBy(f){
+  const r=svg.getBoundingClientRect();
+  const cx=r.width/2, cy=r.height/2;
+  const wx=(cx-view.tx)/view.scale, wy=(cy-view.ty)/view.scale;
+  view.scale=clamp(view.scale*f,0.2,3);
+  view.tx=cx-wx*view.scale; view.ty=cy-wy*view.scale;
+  applyTransform();
+}
+
+/* ========================= auto layout ========================= */
+// 層状レイアウト(Sugiyama系)。依存関係(矢印)から左下→右上へ集約する形に自動配置。
+//  1) 最長パスでランク付け。入次数0の起点は「最初の子の直前」まで引き寄せる(長い斜め辺を防ぐ)
+//  2) レイヤ内順序を重心スイープで並べ替え(交差削減)
+//  3) y を近傍中央へ寄せて直線化(鎖はまっすぐ・枝は滑らか)。最小間隔は確保
+//  4) きれいな水平配置を対角へ回転 → アートボードに一括フィット(個別クランプしないので潰れない)
+function autoLayout(){
+  // ---- 調整つまみ ----
+  const VGAP   = 150;  // 同一レイヤ内ノードの縦間隔(枝の分離幅)
+  const MX     = 88;   // 左の余白
+  const MR     = 172;  // 右の余白(ゴールの📅バッジ＆クランプ境界ぶん広め)
+  const MT     = 96;   // 上の余白
+  const MB     = 92;   // 下の余白
+  const OFFRES = 0.42; // 縦のうち枝の振り分けに使ってよい最大割合(残りは対角の伸びに使う)
+
+  const nodes=data.nodes, edges=data.edges;
+  if(!nodes.length) return;
+  const inc={}, out={};
+  nodes.forEach(n=>{ inc[n.id]=[]; out[n.id]=[]; });
+  edges.forEach(e=>{ if(inc[e.to]&&out[e.from]){ inc[e.to].push(e.from); out[e.from].push(e.to); } });
+
+  // 1) 最長パス(ASAP)でランク付け（循環ガードあり）
+  const rank={};
+  function computeRank(id, seen){
+    if(rank[id]!==undefined) return rank[id];
+    if(seen.has(id)) return 0;
+    seen.add(id);
+    const r = inc[id].length ? Math.max(...inc[id].map(p=>computeRank(p,seen)+1)) : 0;
+    seen.delete(id);
+    return rank[id]=r;
+  }
+  nodes.forEach(n=>computeRank(n.id, new Set()));
+  // 起点引き寄せ：入次数0のノードは「最初に繋がる子の直前」へ
+  nodes.forEach(n=>{ if(inc[n.id].length===0 && out[n.id].length)
+    rank[n.id]=Math.max(0, Math.min(...out[n.id].map(c=>rank[c]))-1); });
+  const maxLayer=Math.max(...nodes.map(n=>rank[n.id]));
+  // ゴール(出次数0)は最終レイヤへ
+  nodes.forEach(n=>{ if(n.kind==="goal" && out[n.id].length===0) rank[n.id]=maxLayer; });
+
+  const layers={}; for(let L=0;L<=maxLayer;L++) layers[L]=[];
+  nodes.forEach(n=>layers[rank[n.id]].push(n));
+
+  // 2) レイヤ内順序：重心(barycenter)スイープを往復
+  const order={}; for(let L=0;L<=maxLayer;L++) layers[L].forEach((n,i)=>order[n.id]=i);
+  const bary=ids=>{ const v=ids.map(i=>order[i]).filter(x=>x!==undefined); return v.length? v.reduce((a,b)=>a+b,0)/v.length : -1; };
+  for(let p=0;p<6;p++){
+    const down=p%2===0, seq=[...Array(maxLayer+1).keys()]; if(!down) seq.reverse();
+    for(const L of seq){ const arr=layers[L]; if(arr.length<2) continue;
+      arr.forEach(n=>n._b=bary(down?inc[n.id]:out[n.id]));
+      arr.sort((a,b)=>((a._b<0?order[a.id]:a._b)-(b._b<0?order[b.id]:b._b)));
+      arr.forEach((n,i)=>order[n.id]=i);
+    }
+  }
+
+  // 3) y 直線化：近傍の平均へ寄せつつ最小間隔 VGAP を確保
+  const yy={};
+  for(let L=0;L<=maxLayer;L++){ const arr=layers[L].slice().sort((a,b)=>order[a.id]-order[b.id]);
+    arr.forEach((nd,i)=>yy[nd.id]=(i-(arr.length-1)/2)*VGAP); }
+  for(let it=0; it<12; it++){
+    const down=it%2===0, seq=[...Array(maxLayer+1).keys()]; if(!down) seq.reverse();
+    for(const L of seq){
+      const arr=layers[L].slice().sort((a,b)=>order[a.id]-order[b.id]); if(!arr.length) continue;
+      const pos=arr.map(nd=>{ const nb=[...inc[nd.id],...out[nd.id]]; const v=nb.map(i=>yy[i]);
+        return v.length? v.reduce((a,b)=>a+b,0)/v.length : yy[nd.id]; });
+      for(let i=1;i<pos.length;i++) if(pos[i]<pos[i-1]+VGAP) pos[i]=pos[i-1]+VGAP;
+      for(let i=pos.length-2;i>=0;i--) if(pos[i]>pos[i+1]-VGAP) pos[i]=pos[i+1]-VGAP;
+      arr.forEach((nd,i)=>yy[nd.id]=pos[i]);
+    }
+  }
+
+  // 4) 配置：横は全幅を使い、縦は盤面対角を基準線に。枝は縦オフセットで分離（縮小しないので凝縮しない）
+  const bx0=MX, bx1=PAGE.w-MR, by0=MT, by1=PAGE.h-MB;
+  // 各ノードの縦オフセット = 自レイヤ平均からのズレ（単一ノードのレイヤは0 → 背骨が対角線上でまっすぐ）
+  const off={};
+  for(let L=0;L<=maxLayer;L++){ const arr=layers[L]; if(!arr.length) continue;
+    const mu=arr.reduce((s,n)=>s+yy[n.id],0)/arr.length;
+    arr.forEach(n=>off[n.id]=yy[n.id]-mu); }
+  let maxOff=Math.max(1, ...nodes.map(n=>Math.abs(off[n.id])));
+  const availH=by1-by0;
+  if(2*maxOff > availH*OFFRES){ const k=availH*OFFRES/(2*maxOff); nodes.forEach(n=>off[n.id]*=k); maxOff*=k; }
+  const yTop=by0+maxOff, yBot=by1-maxOff;                         // 基準線の縦レンジ(オフセット分を内側に確保)
+  nodes.forEach(n=>{
+    const t = maxLayer ? rank[n.id]/maxLayer : 0;
+    n.x = bx0 + t*(bx1-bx0);                                      // 左下→右上に全幅を使う
+    n.y = (yBot - t*(yBot-yTop)) + off[n.id];
+    delete n._b;
+    clampToPage(n);
+  });
+
+  render();
+  fitView();
+}
+
+/* ========================= fit view ========================= */
+// 常にアートボード全体が収まるようにフィット
+function fitView(){
+  const rect=svg.getBoundingClientRect();
+  const pad=48;
+  const s=clamp(Math.min((rect.width-pad*2)/PAGE.w, (rect.height-pad*2)/PAGE.h), 0.05, 1.6);
+  view.scale=s;
+  view.tx=(rect.width  - PAGE.w*s)/2;
+  const gap=rect.height - PAGE.h*s;
+  view.ty = gap>0 ? gap*0.30 : gap/2;   // 上寄せ（下に余白を多めに取り見栄えを良く）
+  applyTransform();
+}
+
+// ---- アートボード サイズ/比率プリセット ----
+function applyPageDims(){
+  if(pageKey==="fit"){
+    const rect=svg.getBoundingClientRect();
+    const a=(rect.width/rect.height)||1.6;
+    const h=Math.round(Math.sqrt(A3_AREA/a));
+    PAGE={ w:Math.round(a*h), h };
+  } else {
+    PAGE={ w:PRESETS[pageKey].w, h:PRESETS[pageKey].h };
+  }
+}
+function setPageSize(key){
+  pageKey=key; applyPageDims();
+  data.nodes.forEach(clampToPage);
+  positionTitleBlock();
+  try{ localStorage.setItem("strategyPageKey", key); }catch(_){}
+  document.getElementById("sizeSel").value=key;
+  render(); fitView();
+}
+document.getElementById("sizeSel").addEventListener("change", e=> setPageSize(e.target.value));
+window.addEventListener("resize", ()=>{
+  if(pageKey==="fit"){ applyPageDims(); data.nodes.forEach(clampToPage); positionTitleBlock(); render(); }
+  fitView();
+});
+
+/* ---- タイトルブロック（盤面右下）---- */
+function positionTitleBlock(){
+  const fo=document.getElementById("titleblock");
+  const w=360, h=150;
+  fo.setAttribute("x", PAGE.w - w - 26);
+  fo.setAttribute("y", PAGE.h - h - 26);
+}
+{ const map={ tbTitle:"title", tbName:"name", tbDate:"date" };
+  Object.keys(map).forEach(id=>{
+    document.getElementById(id).addEventListener("input", e=>{ data.titleBlock[map[id]]=e.target.value; autosave(); });
+  });
+}
+
+/* ========================= persistence ========================= */
+function autosave(){
+  if(CLOUD){ updateSaveState(); return; }
+  try{ localStorage.setItem("strategyMap", JSON.stringify(data)); }catch(_){}
+}
+
+/* ---- 直近に開いたファイルの場所を覚える（IndexedDB にファイルハンドルを保存）----
+   File System Access API は任意の絶対パスを初期フォルダに固定できないため、
+   一度開いたハンドルを保存 → 以後 startIn に渡して同じフォルダからダイアログを開く。 */
+let startDir = null;   // 「開く」「保存」ダイアログの開始位置（前回開いたファイル or フォルダのハンドル）
+const FS_DB="strategyMapFS", FS_STORE="handles", FS_KEY="lastFile";
+function fsDB(){
+  return new Promise((res,rej)=>{
+    const o=indexedDB.open(FS_DB,1);
+    o.onupgradeneeded=()=>{ if(!o.result.objectStoreNames.contains(FS_STORE)) o.result.createObjectStore(FS_STORE); };
+    o.onsuccess=()=>res(o.result); o.onerror=()=>rej(o.error);
+  });
+}
+async function saveStartHandle(h){
+  startDir=h;
+  try{ const db=await fsDB(); const tx=db.transaction(FS_STORE,"readwrite"); tx.objectStore(FS_STORE).put(h,FS_KEY);
+       await new Promise(r=>{ tx.oncomplete=r; tx.onerror=r; }); db.close(); }catch(_){}
+}
+async function loadStartHandle(){
+  try{ const db=await fsDB(); const h=await new Promise(r=>{
+         const rq=db.transaction(FS_STORE,"readonly").objectStore(FS_STORE).get(FS_KEY);
+         rq.onsuccess=()=>r(rq.result||null); rq.onerror=()=>r(null); });
+       db.close(); return h; }catch(_){ return null; }
+}
+// 保存ハンドルの権限を確認（必要ならクリック時に一度だけ許可を求める）
+async function ensurePerm(h, mode){
+  try{
+    if(await h.queryPermission({mode})==="granted") return true;
+    return (await h.requestPermission({mode}))==="granted";
+  }catch(_){ return false; }
+}
+
+/* ---- 階層リンク：ノードの link で下位マップへドリルダウン（「← 戻る」付き） ----
+   file:// でも動かすため、File System Access API ではなく旧来の
+   <input webkitdirectory>（フォルダ選択）を使う。初回だけフォルダを選べば以後はキャッシュから即解決。 */
+let navStack=[];        // 戻る用スナップショット [{json, name, handle}]
+let stagedBack=null;    // 手動オープン時に親マップを退避
+let folderFiles=null;   // 選択済みフォルダの { ファイル名 → File }
+let pendingLink=null;   // フォルダ選択後に開くリンク先
+function updateBackBtn(){ const b=document.getElementById("btnBack"); if(b) b.style.display=navStack.length?"inline-flex":"none"; }
+function snapshot(){ return { json: JSON.stringify(serialize()), name: data.title||"", handle: fileHandle, cloud: CLOUD?{...cloud}:null }; }
+// 通常の「開く」直後に呼ぶ：リンク経由なら親を積む／素の手動オープンなら階層をリセット
+function afterManualLoad(){ if(stagedBack){ navStack.push(stagedBack); stagedBack=null; } else { navStack=[]; } updateBackBtn(); }
+document.getElementById("btnBack").addEventListener("click", ()=>{
+  const prev=navStack.pop(); if(!prev) return;
+  if(CLOUD && prev.cloud){ cloud={...prev.cloud}; loadData(JSON.parse(prev.json)); setMapUrl(); updateBackBtn(); updateSaveState(); refreshJira(); toast("戻る： "+(prev.name||"上位マップ")); return; }
+  loadData(JSON.parse(prev.json)); fileHandle=prev.handle||null; updateBackBtn(); toast("戻る： "+(prev.name||"上位マップ"));
+});
+// 選択済みフォルダ（folderFiles）から子マップを読み込む
+async function resolveFromFolder(name){
+  const f=folderFiles && folderFiles.get(name);
+  if(!f){ toast("「"+name+"」がフォルダ内に見つかりません"); return; }
+  try{ const obj=JSON.parse(await f.text()); const snap=snapshot(); loadData(obj); fileHandle=null; navStack.push(snap); updateBackBtn(); toast("開く： "+name); }
+  catch(_){ toast("読み込み失敗： "+name); }
+}
+// フォルダ選択（webkitdirectory は旧来の input。FS Access API ではないので社内ポリシーの影響を受けにくく file:// でも動く）
+document.getElementById("dirpick").addEventListener("change", e=>{
+  folderFiles=new Map();
+  for(const f of e.target.files) folderFiles.set(f.name, f);
+  e.target.value="";
+  const want=pendingLink; pendingLink=null;
+  if(want) resolveFromFolder(want);
+  else toast("フォルダを記憶しました（"+folderFiles.size+"件）");
+});
+// ★dblclick（pointerup）から「同期で」呼ぶこと。await を挟むと click() の user activation が失効する。
+function followLink(name){
+  if(CLOUD){ cloudOpen(name, { push:true }); return; }
+  // http(s)/localhost：fetch で即開く（権限不要・ワンダブルクリック）
+  if(location.protocol==="http:"||location.protocol==="https:"){
+    fetch("./"+encodeURIComponent(name)).then(r=>{ if(!r.ok) throw 0; return r.json(); })
+      .then(obj=>{ const snap=snapshot(); loadData(obj); fileHandle=null; navStack.push(snap); updateBackBtn(); toast("開く： "+name); })
+      .catch(()=>toast("読み込み失敗： "+name));
+    return;
+  }
+  // file://：選択済みフォルダから。未選択なら初回だけフォルダ選択（同期で click → gesture 維持）
+  if(folderFiles && folderFiles.has(name)){ resolveFromFolder(name); return; }
+  pendingLink=name;
+  toast("初回のみ：マップの入ったフォルダを選んでください（以後は自動で潜れます）");
+  document.getElementById("dirpick").click();
+}
+
+function loadData(obj, {layout=false}={}){
+  data = {
+    title: obj.title || "戦略マップ",
+    nodes: (obj.nodes||[]).map((n,i)=>({
+      id: n.id || ("n"+(i+1)),
+      label: n.label||"", assignee:n.assignee||"", due:n.due||"", done:n.done||"",
+      kind: ["start","task","milestone","goal"].includes(n.kind)?n.kind:"task",
+      note: n.note||"", link: n.link||"", jira: (n.jira||"").toString().trim().toUpperCase(),
+      x: typeof n.x==="number"?n.x:undefined,
+      y: typeof n.y==="number"?n.y:undefined
+    })),
+    edges: (obj.edges||[]).map(e=>({ from:e.from, to:e.to, ...(e.label?{label:e.label}:{}) })),
+    titleBlock: {
+      title:(obj.titleBlock&&obj.titleBlock.title)||"",
+      name: (obj.titleBlock&&obj.titleBlock.name) ||"",
+      date: (obj.titleBlock&&obj.titleBlock.date) ||""
+    }
+  };
+  document.getElementById("title").value = data.title;
+  document.getElementById("tbTitle").value = data.titleBlock.title;
+  document.getElementById("tbName").value  = data.titleBlock.name;
+  document.getElementById("tbDate").value  = data.titleBlock.date;
+  selNodes.clear(); selEdge=null; marquee=null; connectFrom=null; hideInspector();
+  const needLayout = layout || data.nodes.some(n=>n.x===undefined || n.y===undefined);
+  if(needLayout) autoLayout(); else { render(); fitView(); }
+}
+
+/* File System Access API (対応ブラウザ: Edge/Chrome) + フォールバック */
+const hasFS = "showOpenFilePicker" in window;
+document.getElementById("btnOpen").addEventListener("click", async ()=>{
+  if(CLOUD){ openMapDialog(); return; }
+  if(hasFS){
+    try{
+      const opts={ id:"strategymap", types:[{description:"JSON",accept:{"application/json":[".json"]}}] };
+      if(startDir) opts.startIn=startDir;   // 前回開いた場所から始める
+      const [h]=await window.showOpenFilePicker(opts);
+      fileHandle=h; saveStartHandle(h);
+      const f=await h.getFile(); loadData(JSON.parse(await f.text()));
+      afterManualLoad();
+      toast("読み込みました： "+h.name);
+      return;
+    }catch(err){
+      if(err && err.name==="AbortError"){ stagedBack=null; return; }   // ユーザーがキャンセルした
+      // File System Access が使えない環境（企業ポリシー / file:// 制限など）→ 従来方式へ
+    }
+  }
+  document.getElementById("filepick").click();   // 普通のファイル選択ダイアログ（必ず動く）
+});
+document.getElementById("filepick").addEventListener("change", async e=>{
+  const f=e.target.files[0]; if(!f) return;
+  if(CLOUD){ e.target.value=""; cloudImport(f); return; }
+  try{ loadData(JSON.parse(await f.text())); afterManualLoad(); toast("読み込みました： "+f.name); }
+  catch(_){ toast("JSONの解析に失敗しました"); }
+  e.target.value="";
+});
+document.getElementById("btnReload").addEventListener("click", async ()=>{
+  if(CLOUD){ cloudReload(); return; }
+  if(fileHandle){
+    try{
+      if(!(await ensurePerm(fileHandle,"read"))){ toast("読み取り権限がありません"); return; }
+      const f=await fileHandle.getFile(); loadData(JSON.parse(await f.text())); toast("再読み込みしました");
+    }catch(_){ toast("再読み込み失敗"); }
+  } else toast("先に「開く」でファイルを指定してください");
+});
+document.getElementById("btnSave").addEventListener("click", async ()=>{
+  if(CLOUD){ cloudSave(); return; }
+  const json=JSON.stringify(serialize(), null, 2);
+  if(fileHandle){
+    try{
+      if(!(await ensurePerm(fileHandle,"readwrite"))){ toast("保存の権限がありません"); return; }
+      const w=await fileHandle.createWritable(); await w.write(json); await w.close(); toast("保存しました： "+fileHandle.name);
+    }catch(_){ toast("保存失敗（権限）"); }
+  } else if(hasFS){
+    try{
+      const opts={ id:"strategymap", suggestedName:"strategy-map.json", types:[{description:"JSON",accept:{"application/json":[".json"]}}] };
+      if(startDir) opts.startIn=startDir;   // 前回開いた場所から始める
+      const h=await window.showSaveFilePicker(opts);
+      fileHandle=h; saveStartHandle(h); const w=await h.createWritable(); await w.write(json); await w.close(); toast("保存しました： "+h.name);
+    }catch(err){ if(err && err.name==="AbortError") return; download(json); }   // 使えない環境はダウンロードへ
+  } else download(json);
+});
+document.getElementById("btnExport").addEventListener("click", ()=> download(JSON.stringify(serialize(),null,2)));
+
+function serialize(){
+  return {
+    title:data.title,
+    titleBlock:data.titleBlock,
+    nodes:data.nodes.map(n=>({ id:n.id,label:n.label,assignee:n.assignee,due:n.due,
+      ...(n.done?{done:n.done}:{}), kind:n.kind,
+      ...(n.note?{note:n.note}:{}), ...(n.link?{link:n.link}:{}), ...(n.jira?{jira:n.jira}:{}), x:Math.round(n.x),y:Math.round(n.y) })),
+    edges:data.edges.map(e=>({ from:e.from,to:e.to, ...(e.label?{label:e.label}:{}) }))
+  };
+}
+function download(json){
+  const blob=new Blob([json],{type:"application/json"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download=(data.title||"strategy-map")+".json";
+  a.click(); URL.revokeObjectURL(a.href);
+  toast("JSONを書き出しました");
+}
+
+/* ========================= toast ========================= */
+let toastT=null;
+function toast(msg){
+  const t=document.getElementById("toast");
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"), 1800);
+}
+
+/* ========================= 共有版（SSO・クラウド保存）=========================
+   /api/me が返れば共有版として動く（Cloudflare Worker 配下）。返らなければ従来のローカル版。
+   共有版では「開く／再読込／保存」とリンク先マップの読み込みを API 経由で行う。 */
+let CLOUD = null;   // ログイン中ユーザー { email, name, picture, via }。null ならローカル版
+let cloud = { name:null, version:0, savedJson:"", updatedBy:"", updatedAt:"" };
+const DEFAULT_MAP = "strategy-map.json";
+
+async function api(method, path, body){
+  const res = await fetch(path, {
+    method, credentials:"same-origin",
+    headers: body!==undefined ? { "Content-Type":"application/json" } : {},
+    body: body!==undefined ? JSON.stringify(body) : undefined
+  });
+  if(res.status===401){ rescueAndLogin(); throw new Error("unauthorized"); }
+  let data=null; try{ data=await res.json(); }catch(_){}
+  return { ok:res.ok, status:res.status, data };
+}
+function errMsg(r){ return (r.data && r.data.message) || ("HTTP "+r.status); }
+function currentJson(){ return JSON.stringify(serialize()); }
+function isDirty(){ return !!CLOUD && currentJson()!==cloud.savedJson; }
+function shortUser(email){ return String(email||"").split("@")[0]; }
+function fmtTime(iso){
+  if(!iso) return "";
+  const d=new Date(iso); if(isNaN(d)) return iso;
+  return (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");
+}
+
+// ログインが切れたら、未保存の変更を退避してからログインへ（戻ってきたら復元を提案）
+function rescueAndLogin(){
+  try{ if(isDirty()) localStorage.setItem("strategyMapRescue", JSON.stringify({ name:cloud.name, version:cloud.version, map:serialize(), at:Date.now() })); }catch(_){}
+  location.href="/auth/login?return="+encodeURIComponent(location.pathname+location.search);
+}
+
+let _ssT=null;
+function updateSaveState(){ clearTimeout(_ssT); _ssT=setTimeout(_updateSaveState, 120); }
+function _updateSaveState(){
+  const el=document.getElementById("saveState");
+  document.getElementById("mapName").textContent = cloud.name || "";
+  document.getElementById("mapName").title = "マップ名: "+(cloud.name||"")+"（ノードのリンク先にはこの名前を書く）";
+  el.title="";
+  if(cloud.version===0){ el.className="cloud-only dirty"; el.textContent="● 未保存（新規）"; return; }
+  if(isDirty()){ el.className="cloud-only dirty"; el.textContent="● 未保存の変更"; return; }
+  el.className="cloud-only saved";
+  el.textContent="✓ 保存済み v"+cloud.version;
+  el.title=cloud.updatedBy?"最終保存: "+shortUser(cloud.updatedBy)+" "+fmtTime(cloud.updatedAt):"";
+}
+function setMapUrl(){
+  if(!cloud.name) return;
+  try{ history.replaceState(null, "", "?map="+encodeURIComponent(cloud.name)); }catch(_){}
+  try{ localStorage.setItem("strategyMapCloudName", cloud.name); }catch(_){}
+}
+
+/** マップを開く。push=true はリンクからのドリルダウン（「← 戻る」に積む）。 */
+async function cloudOpen(name, { push=false, keepNav=false, silentMissing=false, skipConfirm=false }={}){
+  if(!push && !skipConfirm && isDirty() && !confirm("未保存の変更があります。破棄して開きますか？")) return false;
+  let r; try{ r=await api("GET", "/api/maps/"+encodeURIComponent(name)); }catch(_){ return false; }
+  if(r.status===404){ if(!silentMissing) toast("「"+name+"」というマップはまだありません"); return false; }
+  if(!r.ok){ toast("読み込み失敗： "+errMsg(r)); return false; }
+  const snap = push ? snapshot() : null;
+  cloud={ name:r.data.name, version:r.data.version, savedJson:"", updatedBy:r.data.updated_by, updatedAt:r.data.updated_at };
+  loadData(r.data.map);
+  cloud.savedJson=currentJson();
+  if(push) navStack.push(snap); else if(!keepNav) navStack=[];
+  updateBackBtn(); setMapUrl(); updateSaveState(); refreshJira();
+  toast("開く： "+(r.data.map.title||name));
+  return true;
+}
+async function cloudReload(){
+  if(cloud.version===0){ toast("まだ保存されていないマップです"); return; }
+  if(isDirty() && !confirm("未保存の変更を破棄して、最新を読み込みますか？")) return;
+  await cloudOpen(cloud.name, { keepNav:true, skipConfirm:true });
+}
+function askMapName(suggest){
+  const v=prompt("マップ名を入れてください（ノードのリンク先にこの名前を書きます）", suggest||"");
+  if(v===null) return null;
+  const name=v.trim();
+  if(!name || name.length>120 || /[\/\\]/.test(name) || name.startsWith(".")){ toast("その名前は使えません（/ や \\ は不可）"); return null; }
+  return name;
+}
+async function cloudSave(){
+  if(!cloud.name){ const nm=askMapName((data.title||"新しいマップ")+".json"); if(!nm) return; cloud.name=nm; cloud.version=0; }
+  const path="/api/maps/"+encodeURIComponent(cloud.name);
+  let r; try{ r=await api("PUT", path, { map:serialize(), baseVersion:cloud.version }); }catch(_){ return; }
+  if(r.status===409){
+    const d=r.data||{};
+    const who = d.updated_by ? shortUser(d.updated_by)+" さんが "+fmtTime(d.updated_at)+" に" : "他の人が";
+    const msg = cloud.version===0
+      ? "「"+cloud.name+"」という名前のマップは既にあります（"+who+"保存）。\n上書きしますか？（元の内容は履歴に残ります）"
+      : "このマップは、開いた後に "+who+"保存しています。\nOK＝自分の内容で上書き（相手の版は履歴に残ります）\nキャンセル＝保存しない（↻ 再読込で最新を確認できます）";
+    if(!confirm(msg)){ toast("保存を中止しました"); return; }
+    try{ r=await api("PUT", path, { map:serialize(), baseVersion:d.currentVersion||0 }); }catch(_){ return; }
+  }
+  if(!r.ok){ toast("保存失敗： "+errMsg(r)); return; }
+  cloud.version=r.data.version; cloud.updatedBy=r.data.updated_by; cloud.updatedAt=r.data.updated_at;
+  cloud.savedJson=currentJson(); setMapUrl(); updateSaveState();
+  toast("保存しました（v"+cloud.version+"）");
+}
+function startNewMap(name, obj){
+  loadData(obj, { layout: !obj.nodes || obj.nodes.some(n=>typeof n.x!=="number") });
+  cloud={ name, version:0, savedJson:currentJson(), updatedBy:"", updatedAt:"" };
+  navStack=[]; updateBackBtn(); setMapUrl(); updateSaveState(); refreshJira();
+}
+async function cloudImport(file){
+  let obj; try{ obj=JSON.parse(await file.text()); }catch(_){ toast("JSONの解析に失敗しました"); return; }
+  if(isDirty() && !confirm("未保存の変更があります。破棄して取り込みますか？")) return;
+  closeMapDialog();
+  startNewMap(file.name, obj);
+  cloud.savedJson="";   // 取り込んだだけ＝未保存
+  updateSaveState();
+  toast("取り込みました。💾 保存で共有されます（名前： "+file.name+"）");
+}
+
+/* ---- マップ一覧ダイアログ ---- */
+let mapListCache=[];
+const modalBg=document.getElementById("modalBg");
+function closeMapDialog(){ modalBg.classList.remove("show"); }
+async function openMapDialog(){
+  modalBg.classList.add("show");
+  const list=document.getElementById("mapList");
+  list.innerHTML='<div id="mapEmpty">読み込み中…</div>';
+  const f=document.getElementById("mapFilter"); f.value=""; setTimeout(()=>f.focus(), 0);
+  let r; try{ r=await api("GET", "/api/maps"); }catch(_){ return; }
+  if(!r.ok){ list.innerHTML='<div id="mapEmpty">一覧の取得に失敗しました（'+esc(errMsg(r))+'）</div>'; return; }
+  mapListCache=r.data.maps||[];
+  renderMapList();
+}
+function renderMapList(){
+  const list=document.getElementById("mapList");
+  const q=document.getElementById("mapFilter").value.trim().toLowerCase();
+  const rows=mapListCache.filter(m=>!q || String(m.title||"").toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
+  if(!rows.length){
+    list.innerHTML='<div id="mapEmpty">'+(mapListCache.length?"該当するマップがありません":"まだマップがありません。「＋ 新規」か「⇧ JSONを取込」で作れます")+'</div>';
+    return;
+  }
+  list.innerHTML=rows.map(m=>
+    `<div class="maprow${m.name===cloud.name?" cur":""}" tabindex="0" data-name="${esc(m.name)}">`
+    +`<div class="t">${esc(m.title||m.name)}</div>`
+    +`<div class="m">${esc(shortUser(m.updated_by))}<br>${esc(fmtTime(m.updated_at))}</div>`
+    +`<div class="n">${esc(m.name)} ・ v${esc(m.version)}</div></div>`).join("");
+}
+document.getElementById("mapFilter").addEventListener("input", renderMapList);
+document.getElementById("mapList").addEventListener("click", e=>{
+  const row=e.target.closest(".maprow"); if(!row) return;
+  closeMapDialog(); cloudOpen(row.dataset.name);
+});
+document.getElementById("mapList").addEventListener("keydown", e=>{
+  if(e.key!=="Enter") return;
+  const row=e.target.closest(".maprow"); if(!row) return;
+  closeMapDialog(); cloudOpen(row.dataset.name);
+});
+modalBg.addEventListener("pointerdown", e=>{ if(e.target===modalBg) closeMapDialog(); });
+document.getElementById("btnCloseModal").addEventListener("click", closeMapDialog);
+document.getElementById("btnImport").addEventListener("click", ()=> document.getElementById("filepick").click());
+document.getElementById("btnNewMap").addEventListener("click", ()=>{
+  if(isDirty() && !confirm("未保存の変更があります。破棄して新規作成しますか？")) return;
+  const name=askMapName("新しいマップ.json"); if(!name) return;
+  if(mapListCache.some(m=>m.name===name)){ toast("「"+name+"」は既にあります"); return; }
+  closeMapDialog();
+  startNewMap(name, { ...SAMPLE, title:name.replace(/\.json$/i,"") });
+  toast("新規マップ： "+name+"（💾 保存で共有されます）");
+});
+window.addEventListener("keydown", e=>{
+  if(modalBg.classList.contains("show") && e.key==="Escape"){ closeMapDialog(); e.stopImmediatePropagation(); return; }
+  if((e.metaKey||e.ctrlKey) && (e.key==="s"||e.key==="S")){ e.preventDefault(); document.getElementById("btnSave").click(); }
+}, true);
+window.addEventListener("beforeunload", e=>{ if(isDirty()){ e.preventDefault(); e.returnValue=""; } });
+
+/* ---- Jira ---- */
+let _jT=null;
+function scheduleJira(){ clearTimeout(_jT); _jT=setTimeout(()=>refreshJira(), 700); }
+async function refreshJira(force=false){
+  if(!CLOUD) return;
+  const keys=[...new Set(data.nodes.map(n=>n.jira).filter(Boolean))];
+  if(!keys.length){ jiraState="ok"; return; }
+  jiraState="loading";
+  let r; try{ r=await api("POST", "/api/jira/issues", { keys, refresh:force }); }catch(_){ return; }
+  if(r.status===503){ jiraState="off"; if(force) toast("Jira連携がサーバーで未設定です"); }
+  else if(!r.ok){ jiraState="error"; toast("Jiraの取得に失敗： "+errMsg(r)); }
+  else {
+    jira={ ...jira, ...r.data.issues };
+    (r.data.missing||[]).forEach(k=>jiraMissing.add(k));
+    Object.keys(r.data.issues||{}).forEach(k=>jiraMissing.delete(k));
+    jiraState="ok";
+    if(force) toast("Jiraの状態を更新しました");
+  }
+  const s=selectedNode(); if(s) updateJiraMeta(s);
+  render();
+}
+document.getElementById("btnJira").addEventListener("click", ()=>refreshJira(true));
+setInterval(()=>{ if(CLOUD && document.visibilityState==="visible") refreshJira(); }, 5*60*1000);
+
+/* ========================= boot ========================= */
+async function boot(){
+  try{ const pk=localStorage.getItem("strategyPageKey"); if(pk && PRESETS[pk]) pageKey=pk; }catch(_){}
+  document.getElementById("sizeSel").value=pageKey;
+  applyPageDims();
+  positionTitleBlock();
+  updateHint();
+
+  if(location.protocol==="http:"||location.protocol==="https:"){
+    let me=null;
+    try{
+      const r=await fetch("/api/me", { credentials:"same-origin" });
+      if(r.status===401){ location.href="/auth/login?return="+encodeURIComponent(location.pathname+location.search); return; }
+      if(r.ok && (r.headers.get("content-type")||"").includes("application/json")) me=await r.json();
+    }catch(_){}
+    if(me && me.email){ await cloudBoot(me); return; }
+  }
+  localBoot();
+}
+
+async function cloudBoot(me){
+  CLOUD=me;
+  document.body.classList.add("cloud");
+  document.getElementById("btnSave").title="共有に保存（Ctrl/⌘+S）";
+  document.getElementById("btnReload").title="共有の最新版を読み込み直す";
+  document.getElementById("btnOpen").title="共有マップの一覧から開く";
+  document.getElementById("btnExport").title="今のマップをJSONファイルとしてダウンロード";
+  // ツールバーを1行に収めるため、共有版では一部ボタンをアイコンのみにする
+  document.getElementById("btnExport").textContent="⇩";
+  document.getElementById("btnFit").textContent="⤢"; document.getElementById("btnFit").title="全体表示";
+  const chip=document.getElementById("userChip");
+  chip.innerHTML=(me.picture?`<img src="${esc(me.picture)}" alt="" referrerpolicy="no-referrer">`:"")
+    +`<span>${esc(me.name||me.email)}</span>`
+    +(me.via==="google"?` <a href="/auth/logout" title="ログアウト">ログアウト</a>`:"");
+  chip.title=me.email;
+
+  const q=new URLSearchParams(location.search).get("map");
+  let last=null; try{ last=localStorage.getItem("strategyMapCloudName"); }catch(_){}
+  const name=q || last || DEFAULT_MAP;
+  let ok=await cloudOpen(name, { silentMissing:true, skipConfirm:true });
+  if(!ok && !q && name!==DEFAULT_MAP) ok=await cloudOpen(DEFAULT_MAP, { silentMissing:true, skipConfirm:true });
+  if(!ok){
+    startNewMap(q||DEFAULT_MAP, SAMPLE);
+    if(q) toast("「"+q+"」はまだありません。新規として開きました");
+  }
+
+  // ログイン切れで退避した未保存の変更があれば復元を提案
+  let rescue=null; try{ rescue=JSON.parse(localStorage.getItem("strategyMapRescue")||"null"); }catch(_){}
+  if(rescue && rescue.name===cloud.name && Date.now()-rescue.at < 7*86400e3){
+    if(confirm("ログインが切れる前の未保存の変更があります。復元しますか？")){
+      const saved=cloud.savedJson; loadData(rescue.map); cloud.version=rescue.version; cloud.savedJson=saved; updateSaveState();
+    }
+  }
+  try{ localStorage.removeItem("strategyMapRescue"); }catch(_){}
+}
+
+function localBoot(){
+  let boot=null;
+  try{ const s=localStorage.getItem("strategyMap"); if(s) boot=JSON.parse(s); }catch(_){}
+  loadData(boot||SAMPLE, { layout:!boot });
+  reconnect();
+}
+
+/* 前回開いたファイルの場所を復帰（ローカル版のみ）：
+   - 「開く／保存」ダイアログを必ずそのフォルダから開けるようにする（startDir）
+   - 「↻ 再読込／💾 保存」が前回ファイルを直接対象にできるようにする（fileHandle）
+   - 権限がまだ有効なら起動時に最新内容を自動で読み込む（なければ初回クリック時に一度だけ許可を聞かれる） */
+async function reconnect(){
+  if(!hasFS) return;
+  try{
+    const h=await loadStartHandle(); if(!h) return;
+    startDir=h; fileHandle=h;
+    if(await h.queryPermission({mode:"read"})==="granted"){
+      const f=await h.getFile(); loadData(JSON.parse(await f.text()));
+      toast("前回のファイルを読み込みました： "+h.name);
+    }
+  }catch(_){}
+}
+
+boot();
+</script>
+</body>
+</html>
