@@ -1,0 +1,76 @@
+# =============================================================================
+# Deploy: strategy-map（戦略マップ）
+#
+# main への push で自動実行:
+#   1. 型チェック
+#   2. D1 マイグレーション適用（未適用分のみ）
+#   3. Cloudflare Workers へ wrangler deploy
+#
+# 必要な GitHub Secrets（MCPハブと共通）:
+#   - CLOUDFLARE_API_TOKEN : Workers Scripts:Edit ＋ D1:Edit 権限を持つ API トークン
+#   - CLOUDFLARE_ACCOUNT_ID: Cloudflare のアカウントID
+#
+# 注意: Worker のシークレット（GOOGLE_* / SESSION_SECRET / ATLASSIAN_* / API_KEY）は
+#       `wrangler secret put` で登録済みの前提。このworkflowでは扱わない。
+# =============================================================================
+
+name: Deploy strategy-map
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-strategy-map
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # 初回セットアップ（README「2. D1 データベースを作る」）前は database_id が未設定なのでデプロイしない
+      - name: Check D1 is configured
+        id: check
+        run: |
+          if grep -q "REPLACE_WITH_D1_DATABASE_ID" wrangler.jsonc; then
+            echo "::warning::wrangler.jsonc の database_id が未設定のためデプロイをスキップします（README の初回セットアップ参照）"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply D1 migrations
+        if: steps.check.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: d1 migrations apply strategy-map --remote
+
+      - name: Deploy to Cloudflare Workers
+        if: steps.check.outputs.ready == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy

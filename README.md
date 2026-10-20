@@ -65,7 +65,6 @@ Claude Code / スクリプト ─(X-API-Key)─┘  それ以外: public/index.h
 
 ### 2. D1 データベースを作る
 ```bash
-cd strategy-map
 npm install
 npx wrangler d1 create strategy-map
 # 表示された database_id を wrangler.jsonc の "REPLACE_WITH_D1_DATABASE_ID" に貼ってコミット
@@ -87,7 +86,7 @@ npx wrangler secret put API_KEY
 
 ### 4. GitHub Actions
 `CLOUDFLARE_API_TOKEN` に **D1:Edit** 権限を追加する（MCPハブ用に Workers Scripts:Edit は付与済み）。
-以降は `main` への push（`strategy-map/**`）で、マイグレーション適用 → デプロイが自動で走る。
+以降は `main` への push で、マイグレーション適用 → デプロイが自動で走る。
 
 ### 5. 今あるマップを入れる
 ```bash
@@ -101,7 +100,7 @@ npm run maps -- push ~/strategy-map/*.json
 
 ## AI から使う（MCPハブ = blink-tools コネクタ）
 
-MCPハブ（`../mcp`）に戦略マップの道具が入っている。claude.ai・Claude Code・定期タスク・Slack の社内AIのどこからでも使える。
+MCPハブ（[internal-tools](https://github.com/blink-team-common/internal-tools) の `mcp/`）に戦略マップの道具が入っている。claude.ai・Claude Code・定期タスク・Slack の社内AIのどこからでも使える。
 MCPハブ → 戦略マップは service binding（`StrategyMapService` の RPC）で、公開URLや鍵は使わない。
 
 | ツール | 内容 | マップを変えるか |
@@ -192,7 +191,8 @@ npm run typecheck
 ## ファイル構成
 
 ```
-strategy-map/
+.
+├── .github/workflows/   # ci.yml（型チェック）/ deploy.yml（main で D1 マイグレーション→デプロイ）
 ├── public/index.html      # 画面（ローカル版／共有版の両対応）
 ├── src/
 │   ├── index.ts           # ルーティング・認証ゲート・CSRF
