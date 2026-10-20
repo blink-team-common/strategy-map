@@ -265,6 +265,7 @@
     <header>
       <h2 id="modalTitle">マップを開く</h2>
       <input id="mapFilter" placeholder="絞り込み" spellcheck="false" autocomplete="off">
+      <button class="tb ghost local-only" id="btnServer" style="display:none" title="このページと同じサーバーに置いてあるマップの一覧に戻る">🌐 サーバー</button>
       <button class="tb ghost local-only" id="btnPickDir" title="マップ（JSON）の入ったフォルダを選ぶ">📁 フォルダ</button>
       <button class="tb" id="btnNewMap">＋ 新規</button>
       <button class="tb ghost" id="btnImport" title="手元のJSONファイルを読み込んで、新しいマップとして保存できる状態にする">⇧ JSONを取込</button>
@@ -1059,7 +1060,7 @@ async function resolveFromFolder(name){
 }
 // フォルダ選択（webkitdirectory は旧来の input。FS Access API ではないので社内ポリシーの影響を受けにくく file:// でも動く）
 document.getElementById("dirpick").addEventListener("change", e=>{
-  folderFiles=new Map();
+  folderFiles=new Map(); localSrc="folder";
   for(const f of e.target.files) folderFiles.set(f.name, f);
   e.target.value="";
   const want=pendingLink; pendingLink=null;
@@ -1070,15 +1071,17 @@ document.getElementById("dirpick").addEventListener("change", e=>{
 // ★dblclick（pointerup）から「同期で」呼ぶこと。await を挟むと click() の user activation が失効する。
 function followLink(name){
   if(CLOUD){ cloudOpen(name, { push:true }); return; }
-  // 「📂 開く」で選んだマップのフォルダがあれば、そこから開く（同じファイルに上書き保存できる）
-  if(mapDir){ openLinkFromDir(name); return; }
-  // http(s)/localhost：fetch で即開く（権限不要・ワンダブルクリック）
-  if(location.protocol==="http:"||location.protocol==="https:"){
-    fetch("./"+encodeURIComponent(name)).then(r=>{ if(!r.ok) throw 0; return r.json(); })
-      .then(obj=>{ const snap=snapshot(); loadData(obj); fileHandle=null; navStack.push(snap); updateBackBtn(); toast("開く： "+name); })
-      .catch(()=>toast("読み込み失敗： "+name));
+  // http(s)（サーバーに静的ファイルとして置いている）：同じ場所の JSON を fetch で開く。
+  // ただし「📂 開く」で手元のフォルダに切り替えているときは、そのフォルダから。
+  if(ON_HTTP && localSrc!=="folder"){
+    const get=u=>fetch(u, { cache:"no-store" }).then(r=>{ if(!r.ok) throw 0; return r.json(); });
+    get(serverUrl(serverBase, name)).catch(()=> serverBase ? get(serverUrl("", name)) : Promise.reject())
+      .then(obj=>{ const snap=snapshot(); loadData(obj); fileHandle=null; curLocal=name; navStack.push(snap); updateBackBtn(); toast("開く： "+name); })
+      .catch(()=>{ if(mapDir) openLinkFromDir(name); else toast("読み込み失敗： "+name); });
     return;
   }
+  // 「📂 開く」で選んだマップのフォルダがあれば、そこから開く（同じファイルに上書き保存できる）
+  if(mapDir){ openLinkFromDir(name); return; }
   // file://：選択済みフォルダから。未選択なら初回だけフォルダ選択（同期で click → gesture 維持）
   if(folderFiles && folderFiles.has(name)){ resolveFromFolder(name); return; }
   pendingLink=name;
@@ -1164,7 +1167,7 @@ async function openSingleFile(){
       const opts={ id:"strategymap", types:[{description:"JSON",accept:{"application/json":[".json"]}}] };
       if(startDir) opts.startIn=startDir;   // 前回開いた場所から始める
       const [h]=await window.showOpenFilePicker(opts);
-      fileHandle=h; saveStartHandle(h);
+      fileHandle=h; curLocal=null; saveStartHandle(h);
       const f=await h.getFile(); loadData(JSON.parse(await f.text()));
       afterManualLoad();
       toast("読み込みました： "+h.name);
@@ -1179,7 +1182,7 @@ async function openSingleFile(){
 document.getElementById("filepick").addEventListener("change", async e=>{
   const f=e.target.files[0]; if(!f) return;
   if(CLOUD){ e.target.value=""; cloudImport(f); return; }
-  try{ loadData(JSON.parse(await f.text())); fileHandle=null; afterManualLoad(); toast("読み込みました： "+f.name); }
+  try{ loadData(JSON.parse(await f.text())); fileHandle=null; curLocal=null; afterManualLoad(); toast("読み込みました： "+f.name); }
   catch(_){ toast("JSONの解析に失敗しました"); }
   e.target.value="";
 });
@@ -1410,6 +1413,7 @@ document.getElementById("btnImport").addEventListener("click", ()=>{
   closeMapDialog(); openSingleFile();
 });
 document.getElementById("btnPickDir").addEventListener("click", ()=> pickMapFolder());
+document.getElementById("btnServer").addEventListener("click", ()=>{ localSrc="server"; refreshLocalList(); });
 document.getElementById("btnNewMap").addEventListener("click", ()=>{
   if(!CLOUD){ localNewMap(); return; }
   if(isDirty() && !confirm("未保存の変更があります。破棄して新規作成しますか？")) return;
@@ -1426,13 +1430,64 @@ document.getElementById("btnNewMap").addEventListener("click", ()=>{
 let mapDir = null;   // マップのフォルダ（FileSystemDirectoryHandle）
 const hasDirFS = "showDirectoryPicker" in window;
 const MAPDIR_KEY = "mapDir";
-function localCurName(){ return fileHandle && fileHandle.kind==="file" ? fileHandle.name : null; }
+const ON_HTTP = location.protocol==="http:" || location.protocol==="https:";
+const SERVER_INDEX = "maps-index.json";   // ディレクトリ一覧を出さないサーバー用：["a.json","b.json"] を並べたファイル
+let localSrc = null;          // "server"（このページと同じサーバー上のマップ）| "folder"（手元のフォルダ）。null＝未判定
+let serverHasMaps = false;
+let curLocal = null;          // 今表示しているマップのファイル名（一覧の「表示中」用）
+function localCurName(){ return curLocal || (fileHandle && fileHandle.kind==="file" ? fileHandle.name : null); }
+/* サーバー上のマップ一覧（上から順に、見つかったものを使う）：
+   1) maps-index.json：["a.json", "maps/b.json", ...] または { "maps": [...] }（ディレクトリ一覧を出さないサーバー用）
+   2) このページと同じ場所のディレクトリ一覧の .json（ページ名が index.html だと一覧ではなくページが返るので、ふつうは 3)）
+   3) maps/ フォルダのディレクトリ一覧の .json（nginx autoindex / Apache / python -m http.server など） */
+let serverBase = "";          // サーバー上のマップの置き場所（"" か "maps/"）。下位マップのリンクもここから開く
+function listingNames(html){
+  const doc=new DOMParser().parseFromString(html, "text/html");
+  return [...new Set([...doc.querySelectorAll("a[href]")].map(a=>{
+    let h=(a.getAttribute("href")||"").split(/[?#]/)[0].replace(/^\.\//,"");
+    try{ h=decodeURIComponent(h); }catch(_){}
+    return h;
+  }).filter(h=>/^[^\/]+\.json$/i.test(h) && h!==SERVER_INDEX))];
+}
+async function fetchListing(dir){
+  try{
+    const r=await fetch("./"+dir, { cache:"no-store" });
+    if(r.ok && (r.headers.get("content-type")||"").includes("html")){ const n=listingNames(await r.text()); if(n.length) return n.map(x=>dir+x); }
+  }catch(_){}
+  return null;
+}
+async function fetchServerMaps(){
+  if(!ON_HTTP) return [];
+  let paths=null;
+  try{
+    const r=await fetch("./"+SERVER_INDEX, { cache:"no-store" });
+    if(r.ok){ const j=await r.json(); const arr=Array.isArray(j)?j:(j&&j.maps)||[];
+      paths=arr.map(x=>typeof x==="string"?x:(x&&(x.path||x.name))).filter(Boolean).map(x=>String(x).replace(/^\.\//,"")); }
+  }catch(_){}
+  if(!paths) paths=await fetchListing("");
+  if(!paths) paths=await fetchListing("maps/");
+  const items=await Promise.all((paths||[]).map(async path=>{
+    try{
+      const r=await fetch("./"+path.split("/").map(encodeURIComponent).join("/"), { cache:"no-store" }); if(!r.ok) return null;
+      const obj=await r.json(); if(!obj || !Array.isArray(obj.nodes)) return null;   // マップ以外の JSON は除外
+      const lm=r.headers.get("last-modified");
+      const i=path.lastIndexOf("/");
+      return { name:path.slice(i+1), dir:path.slice(0,i+1), title:String(obj.title||""), updated_at: lm ? new Date(lm).toISOString() : "", server:true };
+    }catch(_){ return null; }
+  }));
+  const ok=items.filter(Boolean);
+  if(ok.length) serverBase=ok[0].dir;
+  return ok;
+}
+function serverUrl(dir, name){ return "./"+(dir||"").split("/").filter(Boolean).map(x=>encodeURIComponent(x)+"/").join("")+encodeURIComponent(name); }
 function setLocalDialogLabels(){
-  const where = mapDir ? mapDir.name : (folderFiles ? "選んだフォルダ" : "");
-  document.getElementById("modalTitle").innerHTML = "マップを開く" + (where ? ' <span style="font-weight:400;font-size:12px;color:var(--muted)">📁 '+esc(where)+'</span>' : "");
+  document.getElementById("btnServer").style.display = (serverHasMaps && localSrc==="folder") ? "" : "none";
+  const where = localSrc==="server" ? "🌐 サーバー" : mapDir ? "📁 "+mapDir.name : (folderFiles ? "📁 選んだフォルダ" : "");
+  document.getElementById("modalTitle").innerHTML = "マップを開く" + (where ? ' <span style="font-weight:400;font-size:12px;color:var(--muted)">'+esc(where)+'</span>' : "");
   const imp=document.getElementById("btnImport");
   imp.textContent="📄 ファイル"; imp.title="フォルダ以外の JSON ファイルを1つ選んで開く";
-  document.getElementById("btnPickDir").textContent = (mapDir||folderFiles) ? "📁 フォルダを変更" : "📁 フォルダ";
+  document.getElementById("btnPickDir").textContent =
+    localSrc==="server" ? "📁 手元のフォルダ" : (mapDir||folderFiles) ? "📁 フォルダを変更" : "📁 フォルダ";
 }
 async function openLocalDialog(){
   modalBg.classList.add("show");
@@ -1445,8 +1500,18 @@ function localEmpty(html){
   document.getElementById("mapList").innerHTML='<div id="mapEmpty">'+html+'</div>';
 }
 async function refreshLocalList(){
-  setLocalDialogLabels();
   const list=document.getElementById("mapList");
+  // サーバーに置いて使っているなら、まずサーバー上のマップを一覧にする（手元のフォルダ選択は出さない）
+  if(ON_HTTP && localSrc!=="folder"){
+    setLocalDialogLabels();
+    list.innerHTML='<div id="mapEmpty">読み込み中…</div>';
+    const items=await fetchServerMaps();
+    serverHasMaps = items.length>0;
+    if(serverHasMaps){ localSrc="server"; setLocalDialogLabels(); mapListCache=sortLocal(items); renderMapList(); return; }
+    localSrc = localSrc==="server" ? "server" : null;
+    if(localSrc==="server"){ setLocalDialogLabels(); localEmpty("サーバー上にマップ（.json）が見つかりません"); return; }
+  }
+  setLocalDialogLabels();
   if(mapDir){
     let perm="denied"; try{ perm=await mapDir.queryPermission({mode:"readwrite"}); }catch(_){}
     if(perm!=="granted"){
@@ -1486,7 +1551,7 @@ async function pickMapFolder(){
       const opts={ id:"strategymapdir", mode:"readwrite" };
       if(startDir) opts.startIn=startDir;
       const h=await window.showDirectoryPicker(opts);
-      mapDir=h; folderFiles=null; idbPut(MAPDIR_KEY, h);
+      mapDir=h; folderFiles=null; localSrc="folder"; idbPut(MAPDIR_KEY, h);
       if(modalBg.classList.contains("show")) refreshLocalList(); else openLocalDialog();
       return;
     }catch(err){ if(err && err.name==="AbortError") return; /* 使えない環境は従来のフォルダ選択へ */ }
@@ -1499,10 +1564,18 @@ async function grantMapDir(){
 }
 async function localOpen(m){
   if(!m) return;
+  if(m.server){
+    try{
+      const r=await fetch(serverUrl(m.dir, m.name), { cache:"no-store" }); if(!r.ok) throw 0;
+      loadData(await r.json()); fileHandle=null; curLocal=m.name; serverBase=m.dir||""; afterManualLoad();
+      toast("開く： "+m.name+"（サーバー上のマップは読み取り専用。💾 で手元に保存できます）");
+    }catch(_){ toast("読み込み失敗： "+m.name); }
+    return;
+  }
   try{
     const file = m.handle ? await m.handle.getFile() : m.file;
     loadData(JSON.parse(await file.text()));
-    fileHandle = m.handle || null;
+    fileHandle = m.handle || null; curLocal = m.name;
     if(m.handle) saveStartHandle(m.handle);
     afterManualLoad();
     toast("開く： "+m.name);
@@ -1515,7 +1588,7 @@ async function openLinkFromDir(name){
        (await mapDir.requestPermission({mode:"readwrite"}))!=="granted"){ toast("フォルダへのアクセスが許可されていません"); return; }
     const h=await mapDir.getFileHandle(name);
     const obj=JSON.parse(await (await h.getFile()).text());
-    const snap=snapshot(); loadData(obj); fileHandle=h; navStack.push(snap); updateBackBtn(); toast("開く： "+name);
+    const snap=snapshot(); loadData(obj); fileHandle=h; curLocal=name; navStack.push(snap); updateBackBtn(); toast("開く： "+name);
   }catch(err){ toast(err && err.name==="NotFoundError" ? "「"+name+"」がフォルダ「"+mapDir.name+"」にありません" : "読み込み失敗： "+name); }
 }
 async function localNewMap(){
@@ -1524,8 +1597,8 @@ async function localNewMap(){
   if(mapListCache.some(m=>m.name===name)){ toast("「"+name+"」は既にあります"); return; }
   const obj={ ...SAMPLE, title:name.replace(/\.json$/i,"") };
   closeMapDialog();
-  loadData(obj, { layout:true }); fileHandle=null; navStack=[]; updateBackBtn();
-  if(mapDir){
+  loadData(obj, { layout:true }); fileHandle=null; curLocal=null; navStack=[]; updateBackBtn();
+  if(mapDir && localSrc!=="server"){
     try{
       if((await mapDir.queryPermission({mode:"readwrite"}))==="granted"){
         const h=await mapDir.getFileHandle(name, { create:true });
