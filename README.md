@@ -192,7 +192,7 @@ npm run typecheck
 
 ```
 .
-├── .github/workflows/   # ci.yml（型チェック）/ deploy.yml（main で D1 マイグレーション→デプロイ）
+├── .github/workflows/   # ci.yml（型チェック）
 ├── public/index.html      # 画面（ローカル版／共有版の両対応）
 ├── src/
 │   ├── index.ts           # ルーティング・認証ゲート・CSRF
