@@ -168,7 +168,9 @@
   .maprow .n{ font-size:11px; color:var(--muted); }
   .maprow .m{ font-size:11px; color:var(--muted); text-align:right; grid-row:span 2; align-self:center; }
   .maprow.cur .t::after{ content:"  ・表示中"; color:var(--accent); font-weight:400; font-size:11px; }
-  #mapEmpty{ padding:22px; text-align:center; color:var(--muted); font-size:13px; }
+  #mapEmpty{ padding:22px; text-align:center; color:var(--muted); font-size:13px; line-height:1.8; }
+  #mapEmpty .tb{ margin-top:10px; }
+  body.cloud .local-only{ display:none !important; }
 </style>
 </head>
 <body>
@@ -263,6 +265,7 @@
     <header>
       <h2 id="modalTitle">マップを開く</h2>
       <input id="mapFilter" placeholder="絞り込み" spellcheck="false" autocomplete="off">
+      <button class="tb ghost local-only" id="btnPickDir" title="マップ（JSON）の入ったフォルダを選ぶ">📁 フォルダ</button>
       <button class="tb" id="btnNewMap">＋ 新規</button>
       <button class="tb ghost" id="btnImport" title="手元のJSONファイルを読み込んで、新しいマップとして保存できる状態にする">⇧ JSONを取込</button>
       <button class="tb ghost" id="btnCloseModal">✕</button>
@@ -1012,11 +1015,16 @@ async function saveStartHandle(h){
   try{ const db=await fsDB(); const tx=db.transaction(FS_STORE,"readwrite"); tx.objectStore(FS_STORE).put(h,FS_KEY);
        await new Promise(r=>{ tx.oncomplete=r; tx.onerror=r; }); db.close(); }catch(_){}
 }
-async function loadStartHandle(){
+async function loadStartHandle(){ return idbGet(FS_KEY); }
+async function idbGet(key){
   try{ const db=await fsDB(); const h=await new Promise(r=>{
-         const rq=db.transaction(FS_STORE,"readonly").objectStore(FS_STORE).get(FS_KEY);
+         const rq=db.transaction(FS_STORE,"readonly").objectStore(FS_STORE).get(key);
          rq.onsuccess=()=>r(rq.result||null); rq.onerror=()=>r(null); });
        db.close(); return h; }catch(_){ return null; }
+}
+async function idbPut(key, v){
+  try{ const db=await fsDB(); const tx=db.transaction(FS_STORE,"readwrite"); tx.objectStore(FS_STORE).put(v,key);
+       await new Promise(r=>{ tx.oncomplete=r; tx.onerror=r; }); db.close(); }catch(_){}
 }
 // 保存ハンドルの権限を確認（必要ならクリック時に一度だけ許可を求める）
 async function ensurePerm(h, mode){
@@ -1056,11 +1064,14 @@ document.getElementById("dirpick").addEventListener("change", e=>{
   e.target.value="";
   const want=pendingLink; pendingLink=null;
   if(want) resolveFromFolder(want);
+  else if(!CLOUD && modalBg.classList.contains("show")) refreshLocalList();
   else toast("フォルダを記憶しました（"+folderFiles.size+"件）");
 });
 // ★dblclick（pointerup）から「同期で」呼ぶこと。await を挟むと click() の user activation が失効する。
 function followLink(name){
   if(CLOUD){ cloudOpen(name, { push:true }); return; }
+  // 「📂 開く」で選んだマップのフォルダがあれば、そこから開く（同じファイルに上書き保存できる）
+  if(mapDir){ openLinkFromDir(name); return; }
   // http(s)/localhost：fetch で即開く（権限不要・ワンダブルクリック）
   if(location.protocol==="http:"||location.protocol==="https:"){
     fetch("./"+encodeURIComponent(name)).then(r=>{ if(!r.ok) throw 0; return r.json(); })
@@ -1142,8 +1153,12 @@ function focusNode(id){
 
 /* File System Access API (対応ブラウザ: Edge/Chrome) + フォールバック */
 const hasFS = "showOpenFilePicker" in window;
-document.getElementById("btnOpen").addEventListener("click", async ()=>{
+document.getElementById("btnOpen").addEventListener("click", ()=>{
   if(CLOUD){ openMapDialog(); return; }
+  openLocalDialog();
+});
+// 1つの JSON ファイルを選んで開く（ローカル版の一覧ダイアログの「📄 ファイル」から）
+async function openSingleFile(){
   if(hasFS){
     try{
       const opts={ id:"strategymap", types:[{description:"JSON",accept:{"application/json":[".json"]}}] };
@@ -1160,11 +1175,11 @@ document.getElementById("btnOpen").addEventListener("click", async ()=>{
     }
   }
   document.getElementById("filepick").click();   // 普通のファイル選択ダイアログ（必ず動く）
-});
+}
 document.getElementById("filepick").addEventListener("change", async e=>{
   const f=e.target.files[0]; if(!f) return;
   if(CLOUD){ e.target.value=""; cloudImport(f); return; }
-  try{ loadData(JSON.parse(await f.text())); afterManualLoad(); toast("読み込みました： "+f.name); }
+  try{ loadData(JSON.parse(await f.text())); fileHandle=null; afterManualLoad(); toast("読み込みました： "+f.name); }
   catch(_){ toast("JSONの解析に失敗しました"); }
   e.target.value="";
 });
@@ -1357,7 +1372,15 @@ function renderMapList(){
   const q=document.getElementById("mapFilter").value.trim().toLowerCase();
   const rows=mapListCache.filter(m=>!q || String(m.title||"").toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
   if(!rows.length){
-    list.innerHTML='<div id="mapEmpty">'+(mapListCache.length?"該当するマップがありません":"まだマップがありません。「＋ 新規」か「⇧ JSONを取込」で作れます")+'</div>';
+    list.innerHTML='<div id="mapEmpty">'+(mapListCache.length?"該当するマップがありません":(CLOUD?"まだマップがありません。「＋ 新規」か「⇧ JSONを取込」で作れます":"このフォルダにはマップ（.json）がありません。「＋ 新規」で作れます"))+'</div>';
+    return;
+  }
+  if(!CLOUD){
+    list.innerHTML=rows.map((m,i)=>
+      `<div class="maprow${m.name===localCurName()?" cur":""}" tabindex="0" data-i="${mapListCache.indexOf(m)}">`
+      +`<div class="t">${esc(m.title||m.name)}</div>`
+      +`<div class="m">${esc(fmtTime(m.updated_at))}</div>`
+      +`<div class="n">${esc(m.name)}</div></div>`).join("");
     return;
   }
   list.innerHTML=rows.map(m=>
@@ -1367,19 +1390,28 @@ function renderMapList(){
     +`<div class="n">${esc(m.name)} ・ v${esc(m.version)}</div></div>`).join("");
 }
 document.getElementById("mapFilter").addEventListener("input", renderMapList);
+function pickRow(row){
+  closeMapDialog();
+  if(CLOUD) cloudOpen(row.dataset.name); else localOpen(mapListCache[+row.dataset.i]);
+}
 document.getElementById("mapList").addEventListener("click", e=>{
-  const row=e.target.closest(".maprow"); if(!row) return;
-  closeMapDialog(); cloudOpen(row.dataset.name);
+  const act=e.target.closest("[data-act]");
+  if(act){ if(act.dataset.act==="pick") pickMapFolder(); else if(act.dataset.act==="grant") grantMapDir(); return; }
+  const row=e.target.closest(".maprow"); if(row) pickRow(row);
 });
 document.getElementById("mapList").addEventListener("keydown", e=>{
   if(e.key!=="Enter") return;
-  const row=e.target.closest(".maprow"); if(!row) return;
-  closeMapDialog(); cloudOpen(row.dataset.name);
+  const row=e.target.closest(".maprow"); if(row) pickRow(row);
 });
 modalBg.addEventListener("pointerdown", e=>{ if(e.target===modalBg) closeMapDialog(); });
 document.getElementById("btnCloseModal").addEventListener("click", closeMapDialog);
-document.getElementById("btnImport").addEventListener("click", ()=> document.getElementById("filepick").click());
+document.getElementById("btnImport").addEventListener("click", ()=>{
+  if(CLOUD){ document.getElementById("filepick").click(); return; }
+  closeMapDialog(); openSingleFile();
+});
+document.getElementById("btnPickDir").addEventListener("click", ()=> pickMapFolder());
 document.getElementById("btnNewMap").addEventListener("click", ()=>{
+  if(!CLOUD){ localNewMap(); return; }
   if(isDirty() && !confirm("未保存の変更があります。破棄して新規作成しますか？")) return;
   const name=askMapName("新しいマップ.json"); if(!name) return;
   if(mapListCache.some(m=>m.name===name)){ toast("「"+name+"」は既にあります"); return; }
@@ -1387,6 +1419,125 @@ document.getElementById("btnNewMap").addEventListener("click", ()=>{
   startNewMap(name, { ...SAMPLE, title:name.replace(/\.json$/i,"") });
   toast("新規マップ： "+name+"（💾 保存で共有されます）");
 });
+/* ---- ローカル版の「📂 開く」：マップのフォルダの一覧から選ぶ ----
+   Chrome/Edge（File System Access API）：フォルダを一度選べばハンドルを IndexedDB に記憶し、次回からそのまま一覧が出る。
+     一覧から開いたマップは、そのファイルに 💾 上書き保存できる。
+   それ以外のブラウザ：<input webkitdirectory> でフォルダを読む（ページを開き直すたびに選び直し・保存はダウンロード）。 */
+let mapDir = null;   // マップのフォルダ（FileSystemDirectoryHandle）
+const hasDirFS = "showDirectoryPicker" in window;
+const MAPDIR_KEY = "mapDir";
+function localCurName(){ return fileHandle && fileHandle.kind==="file" ? fileHandle.name : null; }
+function setLocalDialogLabels(){
+  const where = mapDir ? mapDir.name : (folderFiles ? "選んだフォルダ" : "");
+  document.getElementById("modalTitle").innerHTML = "マップを開く" + (where ? ' <span style="font-weight:400;font-size:12px;color:var(--muted)">📁 '+esc(where)+'</span>' : "");
+  const imp=document.getElementById("btnImport");
+  imp.textContent="📄 ファイル"; imp.title="フォルダ以外の JSON ファイルを1つ選んで開く";
+  document.getElementById("btnPickDir").textContent = (mapDir||folderFiles) ? "📁 フォルダを変更" : "📁 フォルダ";
+}
+async function openLocalDialog(){
+  modalBg.classList.add("show");
+  const f=document.getElementById("mapFilter"); f.value="";
+  await refreshLocalList();
+  setTimeout(()=>f.focus(), 0);
+}
+function localEmpty(html){
+  mapListCache=[];
+  document.getElementById("mapList").innerHTML='<div id="mapEmpty">'+html+'</div>';
+}
+async function refreshLocalList(){
+  setLocalDialogLabels();
+  const list=document.getElementById("mapList");
+  if(mapDir){
+    let perm="denied"; try{ perm=await mapDir.queryPermission({mode:"readwrite"}); }catch(_){}
+    if(perm!=="granted"){
+      localEmpty("前回のフォルダ「"+esc(mapDir.name)+"」を開くには許可が必要です<br>"
+        +'<button class="tb" data-act="grant">📁 「'+esc(mapDir.name)+'」を開く</button>');
+      return;
+    }
+    list.innerHTML='<div id="mapEmpty">読み込み中…</div>';
+    const items=[];
+    try{
+      for await (const [name, h] of mapDir.entries()){
+        if(h.kind!=="file" || !/\.json$/i.test(name)) continue;
+        try{ const file=await h.getFile(); items.push(await localItem(name, file, h)); }catch(_){}
+      }
+    }catch(_){ localEmpty("フォルダを読めませんでした<br>"+'<button class="tb" data-act="pick">📁 フォルダを選び直す</button>'); return; }
+    mapListCache=sortLocal(items);
+  } else if(folderFiles){
+    const items=[];
+    for(const [name, file] of folderFiles){ if(/\.json$/i.test(name)) items.push(await localItem(name, file, null)); }
+    mapListCache=sortLocal(items);
+  } else {
+    localEmpty("マップ（.json）の入ったフォルダを選ぶと、ここに一覧が出ます"
+      +(hasDirFS?"<br>（次回からはフォルダを覚えています）":"")
+      +'<br><button class="tb" data-act="pick">📁 フォルダを選ぶ</button>');
+    return;
+  }
+  renderMapList();
+}
+async function localItem(name, file, handle){
+  let title=""; try{ title=String(JSON.parse(await file.text()).title||""); }catch(_){}
+  return { name, title, updated_at:new Date(file.lastModified).toISOString(), handle, file };
+}
+function sortLocal(items){ return items.sort((a,b)=> b.updated_at.localeCompare(a.updated_at)); }
+async function pickMapFolder(){
+  if(hasDirFS){
+    try{
+      const opts={ id:"strategymapdir", mode:"readwrite" };
+      if(startDir) opts.startIn=startDir;
+      const h=await window.showDirectoryPicker(opts);
+      mapDir=h; folderFiles=null; idbPut(MAPDIR_KEY, h);
+      if(modalBg.classList.contains("show")) refreshLocalList(); else openLocalDialog();
+      return;
+    }catch(err){ if(err && err.name==="AbortError") return; /* 使えない環境は従来のフォルダ選択へ */ }
+  }
+  document.getElementById("dirpick").click();
+}
+async function grantMapDir(){
+  try{ if((await mapDir.requestPermission({mode:"readwrite"}))==="granted"){ refreshLocalList(); return; } }catch(_){}
+  toast("許可されませんでした。「📁 フォルダを変更」で選び直せます");
+}
+async function localOpen(m){
+  if(!m) return;
+  try{
+    const file = m.handle ? await m.handle.getFile() : m.file;
+    loadData(JSON.parse(await file.text()));
+    fileHandle = m.handle || null;
+    if(m.handle) saveStartHandle(m.handle);
+    afterManualLoad();
+    toast("開く： "+m.name);
+  }catch(_){ toast("読み込み失敗： "+m.name); }
+}
+// ノードのリンク先（下位マップ）をマップのフォルダから開く
+async function openLinkFromDir(name){
+  try{
+    if((await mapDir.queryPermission({mode:"readwrite"}))!=="granted" &&
+       (await mapDir.requestPermission({mode:"readwrite"}))!=="granted"){ toast("フォルダへのアクセスが許可されていません"); return; }
+    const h=await mapDir.getFileHandle(name);
+    const obj=JSON.parse(await (await h.getFile()).text());
+    const snap=snapshot(); loadData(obj); fileHandle=h; navStack.push(snap); updateBackBtn(); toast("開く： "+name);
+  }catch(err){ toast(err && err.name==="NotFoundError" ? "「"+name+"」がフォルダ「"+mapDir.name+"」にありません" : "読み込み失敗： "+name); }
+}
+async function localNewMap(){
+  let name=askMapName("新しいマップ.json"); if(!name) return;
+  if(!/\.json$/i.test(name)) name+=".json";
+  if(mapListCache.some(m=>m.name===name)){ toast("「"+name+"」は既にあります"); return; }
+  const obj={ ...SAMPLE, title:name.replace(/\.json$/i,"") };
+  closeMapDialog();
+  loadData(obj, { layout:true }); fileHandle=null; navStack=[]; updateBackBtn();
+  if(mapDir){
+    try{
+      if((await mapDir.queryPermission({mode:"readwrite"}))==="granted"){
+        const h=await mapDir.getFileHandle(name, { create:true });
+        const w=await h.createWritable(); await w.write(JSON.stringify(serialize(), null, 2)); await w.close();
+        fileHandle=h; saveStartHandle(h);
+        toast("新規マップ： "+name+"（📁 "+mapDir.name+" に作成）");
+        return;
+      }
+    }catch(_){}
+  }
+  toast("新規マップ： "+name+"（💾 保存で保存先を選びます）");
+}
 window.addEventListener("keydown", e=>{
   if(modalBg.classList.contains("show") && e.key==="Escape"){ closeMapDialog(); e.stopImmediatePropagation(); return; }
   if((e.metaKey||e.ctrlKey) && (e.key==="s"||e.key==="S")){ e.preventDefault(); document.getElementById("btnSave").click(); }
@@ -1554,6 +1705,7 @@ function localBoot(){
    - 「↻ 再読込／💾 保存」が前回ファイルを直接対象にできるようにする（fileHandle）
    - 権限がまだ有効なら起動時に最新内容を自動で読み込む（なければ初回クリック時に一度だけ許可を聞かれる） */
 async function reconnect(){
+  if(hasDirFS){ const d=await idbGet(MAPDIR_KEY); if(d) mapDir=d; }
   if(!hasFS) return;
   try{
     const h=await loadStartHandle(); if(!h) return;
